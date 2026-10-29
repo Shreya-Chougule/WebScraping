@@ -13,7 +13,7 @@ class ExtractedProject:
     posted_date: Optional[str]
     deadline: Optional[str]
     technologies: list[str]
-    project_type: str
+    project_type: Optional[str]
     source_name: str
     original_url: str
 
