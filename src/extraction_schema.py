@@ -1,8 +1,9 @@
 
-from dataclasses import dataclass, asdict
-from typing import Optional
-import json
 import csv
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -16,8 +17,10 @@ class ExtractedProject:
     project_type: Optional[str]
     source_name: str
     original_url: str
+    pricing_type: Optional[str] = None
 
     def to_dict(self) -> dict:
+        """Convert the project into a dictionary for export."""
         return asdict(self)
 
 
@@ -25,38 +28,35 @@ def save_projects_json(
     projects: list[ExtractedProject],
     output_path: str,
 ) -> None:
-    """Save extracted projects to a UTF-8 JSON file."""
-    with open(output_path, "w", encoding="utf-8") as file:
-        json.dump(
-            [project.to_dict() for project in projects],
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
+    """Save extracted projects as a JSON array."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data = [project.to_dict() for project in projects]
+
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=2, ensure_ascii=False)
 
 
 def save_projects_csv(
     projects: list[ExtractedProject],
     output_path: str,
 ) -> None:
-    """Save extracted projects to a UTF-8 CSV file."""
-    fieldnames = [
-        "title",
-        "description",
-        "budget",
-        "posted_date",
-        "deadline",
-        "technologies",
-        "project_type",
-        "source_name",
-        "original_url",
-    ]
+    """Save extracted projects as a CSV file."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w", newline="", encoding="utf-8-sig") as file:
+    fieldnames = list(ExtractedProject.__dataclass_fields__.keys())
+
+    with path.open(
+        "w",
+        newline="",
+        encoding="utf-8-sig",
+    ) as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
 
         for project in projects:
             row = project.to_dict()
-            row["technologies"] = ", ".join(project.technologies)
+            row["technologies"] = ", ".join(row["technologies"])
             writer.writerow(row)

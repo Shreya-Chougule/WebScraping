@@ -2,7 +2,7 @@
 import json
 from html import unescape
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 
 from bs4 import BeautifulSoup
 
@@ -29,18 +29,15 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
     for record in records:
         title = record.get("title")
-
         if not isinstance(title, str) or not title.strip():
             continue
 
-        # Description: preserve the supplied text; use None if missing.
         description = record.get("description")
         if isinstance(description, str):
             description = unescape(description).strip() or None
         else:
             description = None
 
-        # Budget: retain the source currency and amount.
         budget_value = record.get("budget")
         currency = record.get("currency")
 
@@ -53,7 +50,6 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         else:
             budget = None
 
-        # Keep the date in ISO YYYY-MM-DD format when available.
         raw_date = record.get("created_at")
         posted_date = (
             raw_date[:10]
@@ -61,7 +57,6 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
             else None
         )
 
-        # Extract skills without duplicates.
         skills: Any = record.get("skills")
         technologies = []
 
@@ -74,7 +69,6 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
         technologies = list(dict.fromkeys(technologies))
 
-        # Accept only project links on Truelancer's domain.
         original_url = record.get("link")
         if not (
             isinstance(original_url, str)
@@ -87,6 +81,12 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         ):
             original_url = None
 
+        pricing_type = record.get("jobTypeName")
+        if isinstance(pricing_type, str):
+            pricing_type = pricing_type.strip() or None
+        else:
+            pricing_type = None
+
         projects.append(
             ExtractedProject(
                 title=title.strip(),
@@ -98,6 +98,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 project_type=None,
                 source_name="Truelancer",
                 original_url=original_url,
+                pricing_type=pricing_type,
             )
         )
 
@@ -109,11 +110,5 @@ def parse_truelancer_file(
 ) -> list[ExtractedProject]:
     """Parse a saved HTML file without making network requests."""
     path = Path(file_path)
-
-    html = path.read_text(
-        encoding="utf-8",
-        errors="replace",
-    )
-
+    html = path.read_text(encoding="utf-8", errors="replace")
     return parse_truelancer_html(html)
-
