@@ -1,0 +1,16 @@
+[
+  {
+    "title": "Example Web Development Project",
+    "description": "Build a responsive website using React and Python.",
+    "budget": "500-1000 USD",
+    "posted_date": "2026-10-28",
+    "deadline": null,
+    "technologies": [
+      "React",
+      "Python"
+    ],
+    "project_type": "Web",
+    "source_name": "Test Fixture",
+    "original_url": "https://example.com/project/123"
+  }
+]
