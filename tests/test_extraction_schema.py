@@ -15,7 +15,8 @@ def sample_project():
     return ExtractedProject(
         title="Test Web Application",
         description="Build a demo application",
-        budget="$100 - $200",
+        budget="100 - 200",
+        currency="USD",
         posted_date="2026-10-20",
         deadline="2026-11-15",
         technologies=["Python", "FastAPI"],
@@ -30,11 +31,15 @@ def test_project_to_dict():
     data = project.to_dict()
 
     assert data["title"] == "Test Web Application"
+    assert data["budget"] == "100 - 200"
+    assert data["currency"] == "USD"
     assert data["technologies"] == ["Python", "FastAPI"]
     assert data["project_type"] == "Web"
 
 
 def test_save_projects_json(tmp_path):
+    import json
+
     project = sample_project()
     output_file = tmp_path / "projects.json"
 
@@ -42,11 +47,11 @@ def test_save_projects_json(tmp_path):
 
     assert output_file.exists()
 
-    import json
     data = json.loads(output_file.read_text(encoding="utf-8"))
 
     assert len(data) == 1
     assert data[0]["title"] == "Test Web Application"
+    assert data[0]["currency"] == "USD"
     assert data[0]["technologies"] == ["Python", "FastAPI"]
 
 
@@ -67,4 +72,5 @@ def test_save_projects_csv(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["title"] == "Test Web Application"
+    assert rows[0]["currency"] == "USD"
     assert rows[0]["technologies"] == "Python, FastAPI"

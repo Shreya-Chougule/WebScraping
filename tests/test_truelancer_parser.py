@@ -29,7 +29,7 @@ def test_extracts_truelancer_project_fields():
             "title": "Build a Web Application",
             "description": "Create a dashboard &amp; API",
             "budget": 102,
-            "currency": "USD",
+            "currency": "usd",
             "created_at": "2026-10-26T17:01:01.000000Z",
             "skills": [{"tagName": "Python"}, {"tagName": "FastAPI"}],
             "link": (
@@ -44,12 +44,39 @@ def test_extracts_truelancer_project_fields():
     assert len(projects) == 1
     project = projects[0]
     assert project.title == "Build a Web Application"
-    assert "Create a dashboard" in project.description
-    assert project.budget == "USD 102"
+    assert project.description == "Create a dashboard & API"
+    assert project.budget == "102"
+    assert project.currency == "USD"
     assert project.posted_date == "2026-10-26"
     assert project.technologies == ["Python", "FastAPI"]
+    assert project.project_type == "Web"
     assert project.source_name == "Truelancer"
     assert project.original_url.endswith("build-a-web-application-123")
+
+
+def test_missing_optional_fields_are_none():
+    html = make_html([
+        {
+            "title": "Build a custom solution",
+            "link": (
+                "https://www.truelancer.com/freelance-project/"
+                "custom-solution-456"
+            ),
+        }
+    ])
+
+    projects = parse_truelancer_html(html)
+
+    assert len(projects) == 1
+    project = projects[0]
+
+    assert project.description is None
+    assert project.budget is None
+    assert project.currency is None
+    assert project.posted_date is None
+    assert project.deadline is None
+    assert project.project_type is None
+    assert project.technologies == []
 
 
 def test_skips_records_without_titles():

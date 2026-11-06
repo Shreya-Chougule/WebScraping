@@ -1,3 +1,4 @@
+
 import json
 import re
 from html import unescape
@@ -10,18 +11,28 @@ from bs4 import BeautifulSoup
 from src.extraction_schema import ExtractedProject
 
 
+def clean_text(value: str | None) -> str | None:
+    """Remove HTML markup, decode entities, and normalize whitespace."""
+    if not isinstance(value, str):
+        return None
+
+    text = BeautifulSoup(unescape(value), "html.parser").get_text(" ")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"([.!?])(?=[A-Z])", r"\1 ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text or None
+
+
 def infer_truelancer_project_type(
     title: str,
     description: str | None,
     technologies: list[str],
 ) -> str | None:
-    """Classify only when the title or description gives clear evidence.
+    """Infer project type conservatively, avoiding incidental mentions."""
 
-    Technologies are deliberately excluded from classification because a
-    skill such as Android development does not prove the project itself
-    is a mobile app.
-    """
-    text = f"{title} {description or ''}".lower()
+    title_text = title.lower()
+    description_text = (description or "").lower()
 
     web_patterns = (
         r"\bweb\s+app(?:lication)?\b",
@@ -30,6 +41,8 @@ def infer_truelancer_project_type(
         r"\bfrontend\s+development\b",
         r"\bfront-end\s+development\b",
         r"\bweb\s+portal\b",
+        r"\bwebsite\s+developer\b",
+        r"\bweb\s+developer\b",
     )
 
     mobile_patterns = (
@@ -48,13 +61,43 @@ def infer_truelancer_project_type(
         r"\bsoftware\s+application\b",
     )
 
-    has_web = any(re.search(pattern, text) for pattern in web_patterns)
-    has_mobile = any(
-        re.search(pattern, text) for pattern in mobile_patterns
+    def matches(patterns: tuple[str, ...], value: str) -> bool:
+        return any(re.search(pattern, value) for pattern in patterns)
+
+    # Strong evidence in the project title takes priority.
+    title_web = matches(web_patterns, title_text)
+    title_mobile = matches(mobile_patterns, title_text)
+    title_software = matches(software_patterns, title_text)
+
+    if title_web and title_mobile:
+        return "Both"
+    if title_web:
+        return "Web"
+    if title_mobile:
+        return "Mobile App"
+    if title_software:
+        return "Software"
+
+    # Description-only classification requires stronger wording:
+    # the project must explicitly request development or creation.
+    web_request_patterns = (
+        r"\b(?:develop|build|create|design)\b.{0,80}\b(?:website|web\s+app|web\s+application|web\s+portal)\b",
+        r"\b(?:website|web\s+app|web\s+application|web\s+portal)\b.{0,80}\b(?:develop|build|create|redesign)\b",
     )
-    has_software = any(
-        re.search(pattern, text) for pattern in software_patterns
+
+    mobile_request_patterns = (
+        r"\b(?:develop|build|create)\b.{0,80}\b(?:mobile|android|ios|iphone)\s+app\b",
+        r"\b(?:mobile|android|ios|iphone)\s+app\b.{0,80}\b(?:develop|build|create)\b",
     )
+
+    software_request_patterns = (
+        r"\b(?:develop|build|create)\b.{0,80}\b(?:desktop|windows)\s+(?:application|software)\b",
+        r"\b(?:desktop|windows)\s+(?:application|software)\b.{0,80}\b(?:develop|build|create)\b",
+    )
+
+    has_web = matches(web_request_patterns, description_text)
+    has_mobile = matches(mobile_request_patterns, description_text)
+    has_software = matches(software_request_patterns, description_text)
 
     if has_web and has_mobile:
         return "Both"
@@ -86,7 +129,6 @@ def canonicalize_url(url: str | None) -> str | None:
     if not parts.path.startswith("/freelance-project/"):
         return None
 
-    # Query strings and fragments do not identify different listings.
     path = parts.path.rstrip("/")
     return urlunsplit(("https", hostname, path, "", "")).lower()
 
@@ -114,36 +156,30 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         if not isinstance(record, dict):
             continue
 
-        title = record.get("title")
-        if not isinstance(title, str) or not title.strip():
+        title = clean_text(record.get("title"))
+        if title is None:
             continue
 
-        title = title.strip()
-
-        description = record.get("description")
-        if isinstance(description, str):
-            description = unescape(description).strip() or None
-        else:
-            description = None
+        description = clean_text(record.get("description"))
 
         budget_value = record.get("budget")
-        currency = record.get("currency")
-
-        if budget_value is not None:
-            budget = (
-                f"{currency} {budget_value}"
-                if currency
-                else str(budget_value)
-            )
-        else:
-            budget = None
-
-        raw_date = record.get("created_at")
-        posted_date = (
-            raw_date[:10]
-            if isinstance(raw_date, str) and len(raw_date) >= 10
+        budget = (
+            str(budget_value).strip()
+            if budget_value is not None and str(budget_value).strip()
             else None
         )
+
+        currency = clean_text(record.get("currency"))
+        if currency:
+            currency = currency.upper()
+
+        raw_date = record.get("created_at")
+        posted_date = None
+
+        if isinstance(raw_date, str) and len(raw_date) >= 10:
+            date_candidate = raw_date[:10]
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_candidate):
+                posted_date = date_candidate
 
         skills: Any = record.get("skills")
         technologies: list[str] = []
@@ -153,16 +189,16 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 if not isinstance(skill, dict):
                     continue
 
-                name = skill.get("tagName") or skill.get("name")
-                if isinstance(name, str) and name.strip():
-                    technologies.append(name.strip())
+                name = clean_text(skill.get("tagName") or skill.get("name"))
+                if name:
+                    technologies.append(name)
 
         technologies = list(dict.fromkeys(technologies))
 
         raw_url = record.get("link")
         original_url = (
             raw_url.strip()
-            if isinstance(raw_url, str)
+            if isinstance(raw_url, str) and raw_url.strip()
             else None
         )
 
@@ -177,11 +213,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         if canonical_url:
             seen_urls.add(canonical_url)
 
-        pricing_type = record.get("jobTypeName")
-        if isinstance(pricing_type, str):
-            pricing_type = pricing_type.strip() or None
-        else:
-            pricing_type = None
+        pricing_type = clean_text(record.get("jobTypeName"))
 
         project_type = infer_truelancer_project_type(
             title=title,
@@ -194,6 +226,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 title=title,
                 description=description,
                 budget=budget,
+                currency=currency,
                 posted_date=posted_date,
                 deadline=None,
                 technologies=technologies,

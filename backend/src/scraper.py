@@ -11,8 +11,12 @@ from src.extraction_schema import (
     save_projects_csv,
     save_projects_json,
 )
+from src.supabase_mapper import map_project_to_supabase
+
 
 API_ENDPOINT = "http://127.0.0.1:8000/projects"
+SOURCE_ENDPOINT = "http://127.0.0.1:8000/sources"
+
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -33,13 +37,14 @@ def infer_project_type(
     description: Optional[str] = None,
     technologies: Optional[list[str]] = None,
 ) -> str:
-    """
-    Infer whether a project is for a web app, mobile app, or both.
-
-    Returns 'Not specified' when there is insufficient evidence.
-    """
+    """Infer the likely project type from available information."""
     text = " ".join(
-        part for part in [title, description or "", " ".join(technologies or [])]
+        part
+        for part in [
+            title,
+            description or "",
+            " ".join(technologies or []),
+        ]
         if part
     ).lower()
 
@@ -80,11 +85,7 @@ def resolve_project_url(
     base_url: str,
     href: Optional[str],
 ) -> str:
-    """
-    Resolve a relative project link.
-
-    Do not silently treat the listing page as a verified project URL.
-    """
+    """Resolve a relative project link."""
     if not href:
         return NOT_SPECIFIED
 
@@ -178,7 +179,6 @@ def parse_project_cards(
             else None
         )
 
-        # Find the project link, if present.
         link_element = (
             title_element
             if title_element.name == "a"
@@ -188,7 +188,6 @@ def parse_project_cards(
         href = link_element.get("href") if link_element else None
         original_url = resolve_project_url(base_url, href)
 
-        # Extract technologies and remove duplicates case-insensitively.
         technology_elements = (
             card.select(technologies_selector)
             if technologies_selector
@@ -215,6 +214,7 @@ def parse_project_cards(
             title=title,
             description=description or NOT_SPECIFIED,
             budget=budget or NOT_SPECIFIED,
+            currency=None,
             posted_date=posted_date or NOT_SPECIFIED,
             deadline=deadline or NOT_SPECIFIED,
             technologies=technologies,
@@ -244,25 +244,58 @@ def export_projects(projects: list[ExtractedProject]) -> None:
 def send_projects_to_api(
     projects: list[ExtractedProject],
     api_endpoint: str = API_ENDPOINT,
+    source_endpoint: str = SOURCE_ENDPOINT,
 ) -> None:
     """
-    Send projects to the existing API.
-
-    Only fields supported by the current ProjectCreate schema are sent.
+    Send projects to the API after resolving their source IDs.
     """
-    for project in projects:
-        payload = {
-            "title": project.title,
-            "original_url": project.original_url,
-            "description": project.description,
-        }
+    if not projects:
+        print("[INFO] No projects to submit.")
+        return
 
-        # Avoid submitting records without a verified project URL.
-        if project.original_url == NOT_SPECIFIED:
+    # Fetch available sources once instead of once per project.
+    try:
+        source_response = requests.get(
+            source_endpoint,
+            timeout=15,
+        )
+        source_response.raise_for_status()
+        sources = source_response.json()
+
+    except requests.RequestException as exc:
+        print(f"[ERROR] Could not retrieve sources: {exc}")
+        return
+
+    source_lookup = {
+        source["name"].strip().casefold(): source["id"]
+        for source in sources
+        if source.get("name") and source.get("id")
+    }
+
+    for project in projects:
+        if (
+            not project.original_url
+            or project.original_url == NOT_SPECIFIED
+        ):
             print(f"[SKIPPED] Missing project URL: {project.title}")
             continue
 
+        source_id = source_lookup.get(
+            project.source_name.strip().casefold()
+            if project.source_name
+            else ""
+        )
+
+        if not source_id:
+            print(
+                f"[SKIPPED] Source not found: "
+                f"{project.source_name}"
+            )
+            continue
+
         try:
+            payload = map_project_to_supabase(project, source_id)
+
             response = requests.post(
                 api_endpoint,
                 json=payload,
@@ -271,6 +304,9 @@ def send_projects_to_api(
 
             if response.status_code in (200, 201):
                 print(f"[SUCCESS] Inserted: {project.title}")
+
+            elif response.status_code == 409:
+                print(f"[SKIPPED] Duplicate project: {project.title}")
 
             elif response.status_code == 400:
                 print(f"[SKIPPED] Request rejected: {project.title}")
@@ -282,8 +318,14 @@ def send_projects_to_api(
                     f"{project.title} - {response.text}"
                 )
 
+        except ValueError as exc:
+            print(
+                f"[SKIPPED] Invalid project data: "
+                f"{project.title} - {exc}"
+            )
+
         except requests.RequestException as exc:
-            print(f"[ERROR] API connection failed: {exc}")
+            print(f"[ERROR] API request failed: {exc}")
 
 
 if __name__ == "__main__":

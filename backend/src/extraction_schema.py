@@ -11,6 +11,7 @@ class ExtractedProject:
     title: str
     description: Optional[str]
     budget: Optional[str]
+    currency: Optional[str]
     posted_date: Optional[str]
     deadline: Optional[str]
     technologies: list[str]
