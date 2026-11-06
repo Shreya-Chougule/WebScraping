@@ -1,10 +1,12 @@
-# Python virtual environment
+# Python virtual environments
 .venv/
+.venv-1/
 venv/
 
 # Python cache and compiled files
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # Environment variables and secrets
 .env
@@ -12,8 +14,6 @@ __pycache__/
 
 # Generated output
 output/*
-
-# Keep the output directory in Git
 !output/.gitkeep
 
 # Node.js dependencies
@@ -27,4 +27,13 @@ node_modules/
 *.log
 npm-debug.log*
 yarn-debug.log*
-test_data/
+
+# Test data: keep only the saved Truelancer HTML fixture
+test_data/*
+!test_data/
+!test_data/truelancer_listings.html
+
+# Local tool configuration
+.qodo/
+
+.venv-2/

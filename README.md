@@ -1,70 +1,86 @@
-# Getting Started with Create React App
+# ScrapeScout – Web & App Project Discovery Tool
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+ScrapeScout is a project discovery system designed to collect genuine freelance opportunities related to websites, web applications, mobile applications, and software development from approved online platforms.
 
-## Available Scripts
+## Project Workflow
 
-In the project directory, you can run:
+1. Data collection from approved freelance platforms.
+2. Project data extraction and standardization.
+3. Relevance classification.
+4. Duplicate detection.
+5. Database storage using Supabase and PostgreSQL.
+6. Backend API development using FastAPI.
+7. Frontend dashboard for discovering projects.
 
-### `npm start`
+## Current Implementation
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- Truelancer selected as the first data source.
+- Truelancer HTML parser developed.
+- Common project extraction schema created.
+- JSON and CSV export functionality implemented.
+- FastAPI endpoints configured.
+- Supabase database integration tested.
+- Python automated tests added.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+**Current focus:** Phase 4 – First Data Source & Scraper, and Phase 5 – Data Extraction & Standardization.
 
-### `npm test`
+## Technology Stack
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- Python
+- FastAPI
+- React
+- Supabase / PostgreSQL
+- Requests and BeautifulSoup
+- Pytest
+- Git and GitHub
 
-### `npm run build`
+## Repository Structure
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```text
+WebScraping/
+├── backend/
+├── frontend/
+├── tests/
+├── test_data/
+├── output/
+├── README/
+├── pytest.ini
+├── .gitignore
+└── README.md
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Backend Setup
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Install dependencies:
 
-### `npm run eject`
+```bash
+pip install -r backend/requirements.txt
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+Configure the required Supabase environment variables in a local `.env` file.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Start the backend from the repository root:
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```bash
+python -m uvicorn main:app --app-dir backend --reload
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+Open API documentation at:
 
-## Learn More
+http://127.0.0.1:8000/docs
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## Run Tests
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+```bash
+python -m pytest -v
+```
 
-### Code Splitting
+## Project Documentation
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+- [Project Roadmap](README/RoadMap.md)
+- [Source Research](README/Source%20Research.md)
+- [Requirement Analysis](README/requirement-analysis.docx)
 
-### Analyzing the Bundle Size
+## Responsible Data Collection
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Scraping must respect platform terms of service, robots.txt policies, access restrictions, and applicable laws. The project does not intend to bypass authentication, CAPTCHAs, or other access controls.
