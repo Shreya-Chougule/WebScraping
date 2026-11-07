@@ -18,6 +18,9 @@ class ExtractedProject:
     source_name: str
     original_url: Optional[str]
     pricing_type: Optional[str] = None
+    client_name: Optional[str] = None
+    location: Optional[str] = None
+    contact_info: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert the project into a dictionary for export."""

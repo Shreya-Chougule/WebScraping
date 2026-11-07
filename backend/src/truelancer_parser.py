@@ -234,6 +234,11 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
         pricing_type = clean_text(record.get("jobTypeName"))
 
+        country = record.get("countryObj")
+        location = None
+        if isinstance(country, dict):
+            location = clean_text(country.get("name"))
+
         project_type = infer_truelancer_project_type(
             title=title,
             description=description,
@@ -253,6 +258,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 source_name="Truelancer",
                 original_url=original_url,
                 pricing_type=pricing_type,
+                location=location,
             )
         )
 

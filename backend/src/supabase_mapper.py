@@ -44,4 +44,7 @@ def map_project_to_supabase(
         ),
         "source_id": source_id,
         "original_url": project.original_url,
+        "client_name": project.client_name,
+        "location": project.location,
+        "contact_info": project.contact_info,
     }
