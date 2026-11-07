@@ -1,4 +1,3 @@
-
 import json
 import re
 from html import unescape
@@ -71,10 +70,13 @@ def infer_truelancer_project_type(
 
     if title_web and title_mobile:
         return "Both"
+
     if title_web:
         return "Web"
+
     if title_mobile:
         return "Mobile App"
+
     if title_software:
         return "Software"
 
@@ -101,10 +103,13 @@ def infer_truelancer_project_type(
 
     if has_web and has_mobile:
         return "Both"
+
     if has_web:
         return "Web"
+
     if has_mobile:
         return "Mobile App"
+
     if has_software:
         return "Software"
 
@@ -130,7 +135,10 @@ def canonicalize_url(url: str | None) -> str | None:
         return None
 
     path = parts.path.rstrip("/")
-    return urlunsplit(("https", hostname, path, "", "")).lower()
+
+    return urlunsplit(
+        ("https", hostname, path, "", "")
+    ).lower()
 
 
 def parse_truelancer_html(html: str) -> list[ExtractedProject]:
@@ -139,11 +147,14 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
     script = soup.find("script", id="__NEXT_DATA__")
 
     if script is None or not script.string:
-        raise ValueError("Truelancer embedded project data was not found.")
+        raise ValueError(
+            "Truelancer embedded project data was not found."
+        )
 
     try:
         data = json.loads(script.string)
         records = data["props"]["pageProps"]["data"]["projects"]["data"]
+
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise ValueError(
             "Unexpected Truelancer project data structure."
@@ -157,12 +168,14 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
             continue
 
         title = clean_text(record.get("title"))
+
         if title is None:
             continue
 
         description = clean_text(record.get("description"))
 
         budget_value = record.get("budget")
+
         budget = (
             str(budget_value).strip()
             if budget_value is not None and str(budget_value).strip()
@@ -170,6 +183,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         )
 
         currency = clean_text(record.get("currency"))
+
         if currency:
             currency = currency.upper()
 
@@ -178,6 +192,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
         if isinstance(raw_date, str) and len(raw_date) >= 10:
             date_candidate = raw_date[:10]
+
             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_candidate):
                 posted_date = date_candidate
 
@@ -189,13 +204,17 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 if not isinstance(skill, dict):
                     continue
 
-                name = clean_text(skill.get("tagName") or skill.get("name"))
+                name = clean_text(
+                    skill.get("tagName") or skill.get("name")
+                )
+
                 if name:
                     technologies.append(name)
 
         technologies = list(dict.fromkeys(technologies))
 
         raw_url = record.get("link")
+
         original_url = (
             raw_url.strip()
             if isinstance(raw_url, str) and raw_url.strip()
@@ -245,5 +264,9 @@ def parse_truelancer_file(
 ) -> list[ExtractedProject]:
     """Parse a saved HTML file without making network requests."""
     path = Path(file_path)
-    html = path.read_text(encoding="utf-8", errors="replace")
+    html = path.read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+
     return parse_truelancer_html(html)

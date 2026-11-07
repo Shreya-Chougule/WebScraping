@@ -1,11 +1,13 @@
-
-from pydantic import BaseModel
-from typing import Optional, List
-from uuid import UUID
 from datetime import datetime
+from typing import List, Literal, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
 
 
-# --- Source Schemas ---
+# ============================================================
+# SOURCE SCHEMAS
+# ============================================================
 
 class SourceBase(BaseModel):
     name: str
@@ -24,7 +26,9 @@ class SourceResponse(SourceBase):
         from_attributes = True
 
 
-# --- Project Schemas ---
+# ============================================================
+# PROJECT SCHEMAS
+# ============================================================
 
 class ProjectBase(BaseModel):
     title: str
@@ -65,7 +69,9 @@ class ProjectResponse(ProjectBase):
         from_attributes = True
 
 
-# --- Keyword Schemas ---
+# ============================================================
+# KEYWORD SCHEMAS
+# ============================================================
 
 class KeywordBase(BaseModel):
     keyword: str
@@ -78,6 +84,34 @@ class KeywordCreate(KeywordBase):
 class KeywordResponse(KeywordBase):
     id: UUID
     created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================
+# SCRAPING RUN SCHEMAS
+# ============================================================
+
+class ScrapingRunCreate(BaseModel):
+    source_id: UUID
+    status: Literal["RUNNING"] = "RUNNING"
+
+
+class ScrapingRunUpdate(BaseModel):
+    status: Literal["SUCCESS", "FAILED"]
+    records_found: int = Field(default=0, ge=0)
+    error_log: Optional[str] = None
+
+
+class ScrapingRunResponse(BaseModel):
+    id: UUID
+    source_id: Optional[UUID] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    status: Optional[str] = None
+    records_found: Optional[int] = 0
+    error_log: Optional[str] = None
 
     class Config:
         from_attributes = True

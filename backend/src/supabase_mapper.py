@@ -1,4 +1,3 @@
-
 from datetime import datetime
 
 from src.extraction_schema import ExtractedProject

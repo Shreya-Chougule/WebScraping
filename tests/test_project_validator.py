@@ -1,4 +1,3 @@
-
 import sys
 from pathlib import Path
 
@@ -37,23 +36,40 @@ def test_missing_optional_fields_are_allowed():
     project.posted_date = None
     project.deadline = None
     project.project_type = None
-    project.original_url = None
 
     assert validate_project(project) == []
 
 
-def test_missing_title_is_invalid():
+def test_missing_original_url_is_invalid():
     project = sample_project()
-    project.title = ""
+    project.original_url = None
 
     errors = validate_project(project)
 
-    assert "Title is required." in errors
+    assert "Original URL is required." in errors
+
+
+def test_blank_original_url_is_invalid():
+    project = sample_project()
+    project.original_url = "   "
+
+    errors = validate_project(project)
+
+    assert "Original URL is required." in errors
 
 
 def test_invalid_url_is_detected():
     project = sample_project()
     project.original_url = "not-a-valid-url"
+
+    errors = validate_project(project)
+
+    assert any("Original URL" in error for error in errors)
+
+
+def test_url_with_credentials_is_invalid():
+    project = sample_project()
+    project.original_url = "https://user:pass@example.com/project/123"
 
     errors = validate_project(project)
 

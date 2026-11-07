@@ -1,4 +1,3 @@
-
 import csv
 import json
 from dataclasses import asdict, dataclass
@@ -17,7 +16,7 @@ class ExtractedProject:
     technologies: list[str]
     project_type: Optional[str]
     source_name: str
-    original_url: str
+    original_url: Optional[str]
     pricing_type: Optional[str] = None
 
     def to_dict(self) -> dict:

@@ -27,14 +27,28 @@ def is_valid_date(value: str) -> bool:
 
 def is_valid_url(value: str) -> bool:
     """Check whether a URL is an absolute HTTP or HTTPS URL."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+
     try:
         parts = urlsplit(value)
+
+        if parts.scheme == "https":
+            valid_port = parts.port in (None, 443)
+        elif parts.scheme == "http":
+            valid_port = parts.port in (None, 80)
+        else:
+            valid_port = False
+
         return (
-            parts.scheme in {"http", "https"}
+            valid_port
             and bool(parts.netloc)
             and bool(parts.hostname)
+            and parts.username is None
+            and parts.password is None
             and not any(char.isspace() for char in value)
         )
+
     except ValueError:
         return False
 
@@ -58,13 +72,17 @@ def validate_project(project: ExtractedProject) -> list[str]:
     ):
         errors.append("Source name is required.")
 
-    # Original URL is optional, but must be valid when provided.
-    if project.original_url is not None:
-        if (
-            not isinstance(project.original_url, str)
-            or not is_valid_url(project.original_url)
-        ):
-            errors.append("Original URL must be a valid HTTP or HTTPS URL.")
+    # Original URL is required because the database column is NOT NULL.
+    if (
+        not isinstance(project.original_url, str)
+        or not project.original_url.strip()
+    ):
+        errors.append("Original URL is required.")
+
+    elif not is_valid_url(project.original_url):
+        errors.append(
+            "Original URL must be a valid HTTP or HTTPS URL."
+        )
 
     # Optional date fields
     for field_name in ("posted_date", "deadline"):
@@ -94,6 +112,7 @@ def validate_project(project: ExtractedProject) -> list[str]:
     # Technologies must be a list of non-empty strings.
     if not isinstance(project.technologies, list):
         errors.append("Technologies must be a list.")
+
     elif any(
         not isinstance(item, str) or not item.strip()
         for item in project.technologies
