@@ -7,6 +7,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
+from src.classifier import ProjectClassifier
+
 from src.extraction_schema import ExtractedProject
 
 
@@ -162,6 +164,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
     projects: list[ExtractedProject] = []
     seen_urls: set[str] = set()
+    classifier = ProjectClassifier()
 
     for record in records:
         if not isinstance(record, dict):
@@ -245,6 +248,12 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
             technologies=technologies,
         )
 
+        category, confidence_score, is_relevant = classifier.classify(
+            title=title,
+            description=description,
+            technologies=technologies,
+        )
+
         projects.append(
             ExtractedProject(
                 title=title,
@@ -259,6 +268,9 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
                 original_url=original_url,
                 pricing_type=pricing_type,
                 location=location,
+                category=category,
+                confidence_score=confidence_score,
+                is_relevant=is_relevant,
             )
         )
 

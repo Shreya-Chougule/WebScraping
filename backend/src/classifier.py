@@ -6,17 +6,17 @@ class ProjectClassifier:
         # Category-wise keywords definition for ScrapeScout
         self.keywords = {
             "web": [
-                "react", "next.js", "vue", "angular", "html", "css", "javascript", 
-                "typescript", "wordpress", "shopify", "django", "fastapi", "flask", 
+                "react", "next.js", "vue", "angular", "html", "css", "javascript",
+                "typescript", "wordpress", "shopify", "web app", "web application", "django", "fastapi", "flask",
                 "node.js", "website", "landing page", "e-commerce", "web development", "frontend"
             ],
             "app": [
-                "flutter", "react native", "android", "ios", "swift", "kotlin", 
+                "flutter", "react native", "android", "ios", "swift", "kotlin",
                 "mobile app", "android app", "ios app", "flutter app", "cross-platform", "mobile application"
             ],
             "software": [
-                "python", "java", "c++", "c#", "backend", "api", "database", 
-                "automation", "script", "machine learning", "ai", "data science", 
+                "python", "java", "c++", "c#", "backend", "api", "database",
+                "automation", "script", "machine learning", "ai", "data science",
                 "software development", "desktop application"
             ]
         }
@@ -28,24 +28,24 @@ class ProjectClassifier:
         """
         # Combine all text for searching keywords
         text = f"{title} {description or ''} {' '.join(technologies or [])}".lower()
-        
+
         scores = {"web": 0, "app": 0, "software": 0}
-        
+
         # Count keyword matches for each category using word boundaries
         for category, words in self.keywords.items():
             for word in words:
-                if re.search(r'\b' + re.escape(word) + r'\b', text):
+               if re.search(r'(?<!\w)' + re.escape(word) + r'(?!\w)', text):
                     scores[category] += 1
 
         total_matches = sum(scores.values())
-        
+
         # If no keywords matched at all
         if total_matches == 0:
             return "Other / Irrelevant", 0.0, False
 
         # Determine dominant categories
         matched_categories = [cat for cat, score in scores.items() if score > 0]
-        
+
         if len(matched_categories) > 1 and "web" in matched_categories and "app" in matched_categories:
             category = "Both"
         elif len(matched_categories) == 1:

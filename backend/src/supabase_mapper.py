@@ -47,4 +47,6 @@ def map_project_to_supabase(
         "client_name": project.client_name,
         "location": project.location,
         "contact_info": project.contact_info,
+        "category": project.category,
+        "confidence_score": project.confidence_score,
     }

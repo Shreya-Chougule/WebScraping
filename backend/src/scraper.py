@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.classifier import ProjectClassifier
+from src.deduplicator import ProjectDeduplicator
 from src.extraction_schema import (
     ExtractedProject,
     save_projects_csv,
@@ -420,7 +421,27 @@ def send_projects_to_api(
         if source.get("name") and source.get("id")
     }
 
+    # Load existing records once so duplicate checks happen before insertion.
+    try:
+        existing_response = requests.get(api_endpoint, timeout=15)
+        existing_response.raise_for_status()
+        existing_projects = existing_response.json()
+
+        if not isinstance(existing_projects, list):
+            raise ValueError("Projects API did not return a list.")
+
+    except (requests.RequestException, ValueError) as exc:
+        print(f"[ERROR] Could not retrieve existing projects: {exc}")
+        print("[STOPPED] No projects were submitted.")
+        return
+
+    deduplicator = ProjectDeduplicator()
+
     for project in projects:
+        if not project.is_relevant:
+            print(f"[SKIPPED] Irrelevant project: {project.title}")
+            continue
+
         if (
             not isinstance(project.original_url, str)
             or not project.original_url.strip()
@@ -445,6 +466,18 @@ def send_projects_to_api(
         try:
             payload = map_project_to_supabase(project, source_id)
 
+            is_duplicate, duplicate_reason = deduplicator.is_duplicate(
+                payload,
+                existing_projects,
+            )
+
+            if is_duplicate:
+                print(
+                    f"[SKIPPED] Duplicate project: {project.title} "
+                    f"({duplicate_reason})"
+                )
+                continue
+
             response = requests.post(
                 api_endpoint,
                 json=payload,
@@ -453,6 +486,7 @@ def send_projects_to_api(
 
             if response.status_code in (200, 201):
                 print(f"[SUCCESS] Inserted: {project.title}")
+                existing_projects.append(payload)
 
             elif response.status_code == 409:
                 print(f"[SKIPPED] Duplicate project: {project.title}")

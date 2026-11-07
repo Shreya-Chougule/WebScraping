@@ -52,3 +52,91 @@ def test_deduplicator_matching():
     is_dup, reason = deduplicator.is_duplicate(new_project_unique, existing_projects)
     assert is_dup == False
     assert reason is None
+
+
+def test_handles_none_and_missing_fields():
+    deduplicator = ProjectDeduplicator()
+
+    result, reason = deduplicator.is_duplicate(
+        {
+            "title": None,
+            "description": None,
+            "original_url": None,
+        },
+        [
+            {
+                "title": None,
+                "description": None,
+                "original_url": None,
+            }
+        ],
+    )
+
+    assert result is False
+    assert reason is None
+
+
+def test_empty_projects_are_not_false_duplicates():
+    deduplicator = ProjectDeduplicator()
+
+    result, reason = deduplicator.is_duplicate(
+        {
+            "title": "",
+            "description": "",
+            "original_url": "",
+        },
+        [
+            {
+                "title": "",
+                "description": "",
+                "original_url": "",
+            }
+        ],
+    )
+
+    assert result is False
+    assert reason is None
+
+
+def test_normalized_content_detects_duplicate():
+    deduplicator = ProjectDeduplicator()
+
+    existing = [
+        {
+            "title": "  Build a React Website ",
+            "description": " Create a responsive website ",
+        }
+    ]
+
+    new_project = {
+        "title": "build a react website",
+        "description": "create a responsive website",
+    }
+
+    result, reason = deduplicator.is_duplicate(
+        new_project,
+        existing,
+    )
+
+    assert result is True
+    assert "Hash" in reason
+
+
+def test_missing_title_does_not_trigger_fuzzy_match():
+    deduplicator = ProjectDeduplicator()
+
+    result, reason = deduplicator.is_duplicate(
+        {
+            "title": None,
+            "description": "A completely different project",
+        },
+        [
+            {
+                "title": None,
+                "description": "Another different project",
+            }
+        ],
+    )
+
+    assert result is False
+    assert reason is None

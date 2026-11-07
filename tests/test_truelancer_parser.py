@@ -49,7 +49,10 @@ def test_extracts_truelancer_project_fields():
     assert project.currency == "USD"
     assert project.posted_date == "2026-10-26"
     assert project.technologies == ["Python", "FastAPI"]
-    assert project.project_type == "Web"
+    assert project.category == "Web"
+    assert project.confidence_score is not None
+    assert project.confidence_score > 0
+    assert project.is_relevant is True
     assert project.source_name == "Truelancer"
     assert project.original_url.endswith("build-a-web-application-123")
 
@@ -87,3 +90,22 @@ def test_skips_records_without_titles():
 def test_raises_error_when_embedded_data_is_missing():
     with pytest.raises(ValueError, match="embedded project data"):
         parse_truelancer_html("<html><body>No project data</body></html>")
+
+def test_irrelevant_truelancer_project_is_classified():
+    html = make_html([
+        {
+            "title": "Content Writer Needed",
+            "description": "Write blog articles about cooking.",
+            "link": (
+                "https://www.truelancer.com/freelance-project/"
+                "content-writer-789"
+            ),
+        }
+    ])
+
+    projects = parse_truelancer_html(html)
+
+    assert len(projects) == 1
+    assert projects[0].category == "Other / Irrelevant"
+    assert projects[0].confidence_score == 0.0
+    assert projects[0].is_relevant is False

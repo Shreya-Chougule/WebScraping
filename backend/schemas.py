@@ -49,6 +49,8 @@ class ProjectBase(BaseModel):
     deadline: Optional[datetime] = None
 
     contact_info: Optional[str] = None
+    category: Optional[str] = None
+    confidence_score: Optional[float] = None
 
 
 class ProjectCreate(ProjectBase):

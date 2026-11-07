@@ -21,6 +21,9 @@ class ExtractedProject:
     client_name: Optional[str] = None
     location: Optional[str] = None
     contact_info: Optional[str] = None
+    category: Optional[str] = None
+    confidence_score: Optional[float] = None
+    is_relevant: bool = True
 
     def to_dict(self) -> dict:
         """Convert the project into a dictionary for export."""
