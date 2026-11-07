@@ -7,6 +7,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
+from src.classifier import ProjectClassifier
 from src.extraction_schema import (
     ExtractedProject,
     save_projects_csv,
@@ -114,6 +115,9 @@ def fetch_page(
         )
 
     return response.text
+
+# Initialize the Project Classifier (Phase 6)
+classifier = ProjectClassifier()
 
 
 def clean_text(value: Optional[str]) -> Optional[str]:
@@ -344,6 +348,13 @@ def parse_project_cards(
             technologies=technologies,
         )
 
+        # Phase 6: Classify project category and confidence score
+        category, confidence_score, is_relevant = classifier.classify(
+            title=title,
+            description=description,
+            technologies=technologies,
+        )
+
         project = ExtractedProject(
             title=title,
             description=description or NOT_SPECIFIED,
@@ -355,6 +366,8 @@ def parse_project_cards(
             project_type=project_type,
             source_name=source_name or NOT_SPECIFIED,
             original_url=original_url,
+            category=category,              # Phase 6 Field
+            confidence_score=confidence_score # Phase 6 Field
         )
 
         projects.append(project)
@@ -727,3 +740,5 @@ if __name__ == "__main__":
         "Configure selectors for an approved source "
         "before fetching live pages."
     )
+    print("ScrapeScout extraction and classification module is ready.")
+    print("Configure selectors for an approved source before fetching live pages.")
