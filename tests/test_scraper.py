@@ -1,13 +1,14 @@
+
 import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
-from src.extraction_schema import ExtractedProject
 
 import pytest
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.extraction_schema import ExtractedProject
 from src.scraper import (
     ScrapingAccessError,
     clean_text,
@@ -266,11 +267,17 @@ def test_unknown_project_type_returns_none():
 
     assert result is None
 
+
+# ============================================================
+# API SUBMISSION TEST HELPERS
+# ============================================================
+
 def make_submission_project(
     title="Build a React Website",
     description="Create a responsive website using React.",
     original_url="https://www.truelancer.com/project/123",
     is_relevant=True,
+    source_name="Truelancer",
 ):
     return ExtractedProject(
         title=title,
@@ -281,7 +288,7 @@ def make_submission_project(
         deadline=None,
         technologies=["React"],
         project_type="Web",
-        source_name="Truelancer",
+        source_name=source_name,
         original_url=original_url,
         category="web",
         confidence_score=0.75,
@@ -298,34 +305,44 @@ def make_api_response(data, status_code=200):
     return response
 
 
+def make_submission_get_responses(existing_projects=None):
+    sources_response = make_api_response([
+        {"name": "Truelancer", "id": "source-123"}
+    ])
+    existing_response = make_api_response(
+        existing_projects if existing_projects is not None else []
+    )
+    return sources_response, existing_response
+
+
+# ============================================================
+# EXISTING API SUBMISSION TESTS
+# ============================================================
+
 def test_submission_skips_irrelevant_projects():
     project = make_submission_project(
         title="Content Writer Needed",
         is_relevant=False,
     )
 
-    sources_response = make_api_response([
-        {"name": "Truelancer", "id": "source-123"}
-    ])
-    existing_response = make_api_response([])
+    sources_response, existing_response = make_submission_get_responses()
 
     with patch(
         "src.scraper.requests.get",
         side_effect=[sources_response, existing_response],
     ), patch("src.scraper.requests.post") as mock_post:
 
-        send_projects_to_api([project])
+        result = send_projects_to_api([project])
 
     mock_post.assert_not_called()
+    assert result["irrelevant_skipped"] == 1
+    assert result["inserted"] == 0
 
 
 def test_submission_skips_existing_duplicate():
     project = make_submission_project()
 
-    sources_response = make_api_response([
-        {"name": "Truelancer", "id": "source-123"}
-    ])
-    existing_response = make_api_response([
+    sources_response, existing_response = make_submission_get_responses([
         {
             "title": project.title,
             "description": project.description,
@@ -338,18 +355,16 @@ def test_submission_skips_existing_duplicate():
         side_effect=[sources_response, existing_response],
     ), patch("src.scraper.requests.post") as mock_post:
 
-        send_projects_to_api([project])
+        result = send_projects_to_api([project])
 
     mock_post.assert_not_called()
+    assert result["duplicate_skipped"] == 1
 
 
 def test_submission_sends_unique_project_with_classification():
     project = make_submission_project()
 
-    sources_response = make_api_response([
-        {"name": "Truelancer", "id": "source-123"}
-    ])
-    existing_response = make_api_response([])
+    sources_response, existing_response = make_submission_get_responses()
     post_response = make_api_response({}, status_code=201)
 
     with patch(
@@ -360,7 +375,7 @@ def test_submission_sends_unique_project_with_classification():
         return_value=post_response,
     ) as mock_post:
 
-        send_projects_to_api([project])
+        result = send_projects_to_api([project])
 
     mock_post.assert_called_once()
 
@@ -371,15 +386,16 @@ def test_submission_sends_unique_project_with_classification():
     assert payload["source_id"] == "source-123"
     assert "is_relevant" not in payload
 
+    assert result["total"] == 1
+    assert result["inserted"] == 1
+    assert result["failed"] == 0
+
 
 def test_submission_prevents_duplicates_within_same_batch():
     first_project = make_submission_project()
     second_project = make_submission_project()
 
-    sources_response = make_api_response([
-        {"name": "Truelancer", "id": "source-123"}
-    ])
-    existing_response = make_api_response([])
+    sources_response, existing_response = make_submission_get_responses()
     post_response = make_api_response({}, status_code=201)
 
     with patch(
@@ -390,9 +406,11 @@ def test_submission_prevents_duplicates_within_same_batch():
         return_value=post_response,
     ) as mock_post:
 
-        send_projects_to_api([first_project, second_project])
+        result = send_projects_to_api([first_project, second_project])
 
     mock_post.assert_called_once()
+    assert result["inserted"] == 1
+    assert result["duplicate_skipped"] == 1
 
 
 def test_submission_stops_if_existing_projects_cannot_be_loaded():
@@ -412,6 +430,194 @@ def test_submission_stops_if_existing_projects_cannot_be_loaded():
         side_effect=[sources_response, failed_response],
     ), patch("src.scraper.requests.post") as mock_post:
 
-        send_projects_to_api([project])
+        result = send_projects_to_api([project])
 
     mock_post.assert_not_called()
+    assert result["failed"] == 1
+    assert result["inserted"] == 0
+
+
+# ============================================================
+# NEW SUBMISSION RESULT TESTS
+# ============================================================
+
+def test_submission_returns_zero_counts_for_empty_list():
+    result = send_projects_to_api([])
+
+    assert result == {
+        "total": 0,
+        "inserted": 0,
+        "duplicate_skipped": 0,
+        "irrelevant_skipped": 0,
+        "missing_url_skipped": 0,
+        "source_not_found_skipped": 0,
+        "invalid_skipped": 0,
+        "failed": 0,
+    }
+
+
+def test_submission_counts_missing_project_url():
+    project = make_submission_project(original_url=None)
+
+    sources_response, existing_response = make_submission_get_responses()
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch("src.scraper.requests.post") as mock_post:
+
+        result = send_projects_to_api([project])
+
+    mock_post.assert_not_called()
+    assert result["missing_url_skipped"] == 1
+
+
+def test_submission_counts_unknown_source():
+    project = make_submission_project(source_name="Unknown Platform")
+
+    sources_response, existing_response = make_submission_get_responses()
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch("src.scraper.requests.post") as mock_post:
+
+        result = send_projects_to_api([project])
+
+    mock_post.assert_not_called()
+    assert result["source_not_found_skipped"] == 1
+
+
+def test_submission_counts_http_409_as_duplicate():
+    project = make_submission_project()
+
+    sources_response, existing_response = make_submission_get_responses()
+    post_response = make_api_response({}, status_code=409)
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch(
+        "src.scraper.requests.post",
+        return_value=post_response,
+    ):
+
+        result = send_projects_to_api([project])
+
+    assert result["duplicate_skipped"] == 1
+    assert result["inserted"] == 0
+
+
+def test_submission_counts_http_400_as_invalid():
+    project = make_submission_project()
+
+    sources_response, existing_response = make_submission_get_responses()
+    post_response = make_api_response({}, status_code=400)
+    post_response.text = "Invalid request"
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch(
+        "src.scraper.requests.post",
+        return_value=post_response,
+    ):
+
+        result = send_projects_to_api([project])
+
+    assert result["invalid_skipped"] == 1
+    assert result["failed"] == 0
+
+
+def test_submission_counts_other_http_errors_as_failed():
+    project = make_submission_project()
+
+    sources_response, existing_response = make_submission_get_responses()
+    post_response = make_api_response({}, status_code=500)
+    post_response.text = "Internal server error"
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch(
+        "src.scraper.requests.post",
+        return_value=post_response,
+    ):
+
+        result = send_projects_to_api([project])
+
+    assert result["failed"] == 1
+    assert result["inserted"] == 0
+
+
+def test_submission_counts_request_exception_as_failed():
+    project = make_submission_project()
+
+    sources_response, existing_response = make_submission_get_responses()
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch(
+        "src.scraper.requests.post",
+        side_effect=requests.Timeout("Request timed out"),
+    ):
+
+        result = send_projects_to_api([project])
+
+    assert result["failed"] == 1
+    assert result["inserted"] == 0
+
+
+def test_submission_counts_invalid_project_mapping():
+    project = make_submission_project()
+
+    sources_response, existing_response = make_submission_get_responses()
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch(
+        "src.scraper.requests.post",
+    ) as mock_post, patch(
+        "src.scraper.map_project_to_supabase",
+        side_effect=ValueError("Invalid project date"),
+    ):
+
+        result = send_projects_to_api([project])
+
+    mock_post.assert_not_called()
+    assert result["invalid_skipped"] == 1
+
+
+def test_submission_counts_source_lookup_failure():
+    project = make_submission_project()
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=requests.ConnectionError("Backend unavailable"),
+    ), patch("src.scraper.requests.post") as mock_post:
+
+        result = send_projects_to_api([project])
+
+    mock_post.assert_not_called()
+    assert result["failed"] == 1
+
+
+def test_submission_counts_invalid_existing_projects_response():
+    project = make_submission_project()
+
+    sources_response = make_api_response([
+        {"name": "Truelancer", "id": "source-123"}
+    ])
+    existing_response = make_api_response({"error": "Invalid response"})
+
+    with patch(
+        "src.scraper.requests.get",
+        side_effect=[sources_response, existing_response],
+    ), patch("src.scraper.requests.post") as mock_post:
+
+        result = send_projects_to_api([project])
+
+    mock_post.assert_not_called()
+    assert result["failed"] == 1

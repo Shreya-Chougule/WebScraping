@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -116,6 +117,7 @@ def fetch_page(
         )
 
     return response.text
+
 
 # Initialize the Project Classifier (Phase 6)
 classifier = ProjectClassifier()
@@ -349,7 +351,6 @@ def parse_project_cards(
             technologies=technologies,
         )
 
-        # Phase 6: Classify project category and confidence score
         category, confidence_score, is_relevant = classifier.classify(
             title=title,
             description=description,
@@ -367,8 +368,9 @@ def parse_project_cards(
             project_type=project_type,
             source_name=source_name or NOT_SPECIFIED,
             original_url=original_url,
-            category=category,              # Phase 6 Field
-            confidence_score=confidence_score # Phase 6 Field
+            category=category,
+            confidence_score=confidence_score,
+            is_relevant=is_relevant,
         )
 
         projects.append(project)
@@ -397,33 +399,57 @@ def send_projects_to_api(
     projects: list[ExtractedProject],
     api_endpoint: str = API_ENDPOINT,
     source_endpoint: str = SOURCE_ENDPOINT,
-) -> None:
-    """Send projects to the API after resolving their source IDs."""
+) -> dict[str, int]:
+    """
+    Submit eligible projects to the FastAPI backend.
+
+    Returns counts for inserted, skipped, and failed projects.
+    Does not make direct Supabase requests.
+    """
+    results = {
+        "total": len(projects),
+        "inserted": 0,
+        "duplicate_skipped": 0,
+        "irrelevant_skipped": 0,
+        "missing_url_skipped": 0,
+        "source_not_found_skipped": 0,
+        "invalid_skipped": 0,
+        "failed": 0,
+    }
+
     if not projects:
         print("[INFO] No projects to submit.")
-        return
+        return results
 
     try:
         source_response = requests.get(
             source_endpoint,
-            timeout=15,
+            timeout=REQUEST_TIMEOUT,
         )
         source_response.raise_for_status()
         sources = source_response.json()
 
-    except requests.RequestException as exc:
+        if not isinstance(sources, list):
+            raise ValueError("Sources API did not return a list.")
+
+    except (requests.RequestException, ValueError) as exc:
         print(f"[ERROR] Could not retrieve sources: {exc}")
-        return
+        results["failed"] = len(projects)
+        return results
 
     source_lookup = {
         source["name"].strip().casefold(): source["id"]
         for source in sources
-        if source.get("name") and source.get("id")
+        if isinstance(source, dict)
+        and source.get("name")
+        and source.get("id")
     }
 
-    # Load existing records once so duplicate checks happen before insertion.
     try:
-        existing_response = requests.get(api_endpoint, timeout=15)
+        existing_response = requests.get(
+            api_endpoint,
+            timeout=REQUEST_TIMEOUT,
+        )
         existing_response.raise_for_status()
         existing_projects = existing_response.json()
 
@@ -433,13 +459,15 @@ def send_projects_to_api(
     except (requests.RequestException, ValueError) as exc:
         print(f"[ERROR] Could not retrieve existing projects: {exc}")
         print("[STOPPED] No projects were submitted.")
-        return
+        results["failed"] = len(projects)
+        return results
 
     deduplicator = ProjectDeduplicator()
 
     for project in projects:
         if not project.is_relevant:
             print(f"[SKIPPED] Irrelevant project: {project.title}")
+            results["irrelevant_skipped"] += 1
             continue
 
         if (
@@ -448,6 +476,7 @@ def send_projects_to_api(
             or project.original_url.strip() == NOT_SPECIFIED
         ):
             print(f"[SKIPPED] Missing project URL: {project.title}")
+            results["missing_url_skipped"] += 1
             continue
 
         source_id = source_lookup.get(
@@ -457,10 +486,8 @@ def send_projects_to_api(
         )
 
         if not source_id:
-            print(
-                f"[SKIPPED] Source not found: "
-                f"{project.source_name}"
-            )
+            print(f"[SKIPPED] Source not found: {project.source_name}")
+            results["source_not_found_skipped"] += 1
             continue
 
         try:
@@ -476,39 +503,49 @@ def send_projects_to_api(
                     f"[SKIPPED] Duplicate project: {project.title} "
                     f"({duplicate_reason})"
                 )
+                results["duplicate_skipped"] += 1
                 continue
 
             response = requests.post(
                 api_endpoint,
                 json=payload,
-                timeout=15,
+                timeout=REQUEST_TIMEOUT,
             )
 
             if response.status_code in (200, 201):
                 print(f"[SUCCESS] Inserted: {project.title}")
                 existing_projects.append(payload)
+                results["inserted"] += 1
 
             elif response.status_code == 409:
                 print(f"[SKIPPED] Duplicate project: {project.title}")
+                results["duplicate_skipped"] += 1
 
             elif response.status_code == 400:
                 print(f"[SKIPPED] Request rejected: {project.title}")
                 print(response.text)
+                results["invalid_skipped"] += 1
 
             else:
                 print(
                     f"[ERROR] HTTP {response.status_code}: "
                     f"{project.title} - {response.text}"
                 )
+                results["failed"] += 1
 
         except ValueError as exc:
             print(
                 f"[SKIPPED] Invalid project data: "
                 f"{project.title} - {exc}"
             )
+            results["invalid_skipped"] += 1
 
         except requests.RequestException as exc:
             print(f"[ERROR] API request failed: {exc}")
+            results["failed"] += 1
+
+    print(f"[SUMMARY] Submission results: {results}")
+    return results
 
 
 # ============================================================
@@ -674,7 +711,7 @@ def create_scraping_run(
             "source_id": source_id,
             "status": "RUNNING",
         },
-        timeout=15,
+        timeout=REQUEST_TIMEOUT,
     )
 
     response.raise_for_status()
@@ -711,7 +748,7 @@ def update_scraping_run(
     response = requests.patch(
         f"{api_endpoint}/{run_id}",
         json=payload,
-        timeout=15,
+        timeout=REQUEST_TIMEOUT,
     )
 
     response.raise_for_status()
