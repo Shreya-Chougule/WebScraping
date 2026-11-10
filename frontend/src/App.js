@@ -1,22 +1,51 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
+
+const API_BASE_URL = (
+  process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8000'
+).replace(/\/$/, '');
+
+const PAGE_SIZE = 100;
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState('');
+
   const [projects, setProjects] = useState([]);
+  const [allProjects, setAllProjects] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedType, setSelectedType] = useState('All');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+
   const [loading, setLoading] = useState(false);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [addingProject, setAddingProject] = useState(false);
+  const [error, setError] = useState('');
 
   const [title, setTitle] = useState('');
   const [originalUrl, setOriginalUrl] = useState('');
   const [description, setDescription] = useState('');
 
-  const [selectedType, setSelectedType] = useState('All');
-  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [dailyDate, setDailyDate] = useState(() => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date());
 
-  // Format values for display
+    return parts;
+  });
+  const [dailyData, setDailyData] = useState(null);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyError, setDailyError] = useState('');
+
   const formatField = (value) => {
     if (value === null || value === undefined || value === '') {
       return 'Not specified';
@@ -39,276 +68,314 @@ function App() {
     return String(value);
   };
 
-  // Fetch projects from FastAPI
-  const fetchProjects = async () => {
-    setLoading(true);
-
+  const getErrorMessage = async (response) => {
     try {
-      const response = await fetch(
-        'http://127.0.0.1:8000/projects'
-      );
-
-      if (!response.ok) {
-        throw new Error(`Request failed: ${response.status}`);
-      }
-
       const data = await response.json();
-      setProjects(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-    } finally {
-      setLoading(false);
+      return data.detail || data.message || `Request failed (${response.status})`;
+    } catch {
+      return `Request failed (${response.status})`;
     }
   };
 
+  const buildProjectQuery = useCallback((currentOffset = 0) => {
+    const params = new URLSearchParams();
+
+    const search = searchTerm.trim();
+    if (search) params.set('search', search);
+    if (selectedType !== 'All') params.set('project_type', selectedType);
+    if (selectedCategory !== 'All') params.set('category', selectedCategory);
+
+    params.set('limit', String(PAGE_SIZE));
+    params.set('offset', String(currentOffset));
+
+    return params.toString();
+  }, [searchTerm, selectedType, selectedCategory]);
+
+  const fetchAllProjects = useCallback(async () => {
+    const response = await fetch(`${API_BASE_URL}/projects`);
+
+    if (!response.ok) {
+      throw new Error(await getErrorMessage(response));
+    }
+
+    const data = await response.json();
+    setAllProjects(Array.isArray(data) ? data : []);
+  }, []);
+
+  const fetchProjects = useCallback(async (currentOffset = 0, append = false) => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const query = buildProjectQuery(currentOffset);
+      const response = await fetch(
+        `${API_BASE_URL}/projects/search?${query}`
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const data = await response.json();
+      const rows = Array.isArray(data) ? data : [];
+
+      setProjects((previous) => append ? [...previous, ...rows] : rows);
+      setOffset(currentOffset);
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (requestError) {
+      console.error('Error fetching projects:', requestError);
+      setError(requestError.message || 'Unable to load projects.');
+      if (!append) setProjects([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [buildProjectQuery]);
+
+  const fetchAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/analytics/dashboard`);
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setAnalytics(await response.json());
+    } catch (requestError) {
+      console.error('Error fetching dashboard analytics:', requestError);
+      setError(requestError.message || 'Unable to load dashboard analytics.');
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, []);
+
+  const fetchDailyOpportunities = useCallback(async (dateValue = dailyDate) => {
+    if (!dateValue) return;
+
+    setDailyLoading(true);
+    setDailyError('');
+
+    try {
+      const params = new URLSearchParams({ date: dateValue });
+      const response = await fetch(
+        `${API_BASE_URL}/analytics/daily-opportunities?${params.toString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setDailyData(await response.json());
+    } catch (requestError) {
+      console.error('Error fetching daily opportunities:', requestError);
+      setDailyError(
+        requestError.message || 'Unable to load daily opportunities.'
+      );
+      setDailyData(null);
+    } finally {
+      setDailyLoading(false);
+    }
+  }, [dailyDate]);
+
+  const refreshDashboard = useCallback(async () => {
+    await Promise.allSettled([
+      fetchProjects(0, false),
+      fetchAllProjects(),
+      fetchAnalytics(),
+      fetchDailyOpportunities(dailyDate)
+    ]);
+  }, [
+    fetchProjects,
+    fetchAllProjects,
+    fetchAnalytics,
+    fetchDailyOpportunities,
+    dailyDate
+  ]);
+
   useEffect(() => {
     if (isLoggedIn) {
-      fetchProjects();
+      refreshDashboard();
     }
-  }, [isLoggedIn]);
+  }, [isLoggedIn, refreshDashboard]);
 
-  // Login
-  const handleLogin = (e) => {
-    e.preventDefault();
+  // Search and filters are sent to the backend.
+  useEffect(() => {
+    if (!isLoggedIn) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      fetchProjects(0, false);
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    isLoggedIn,
+    searchTerm,
+    selectedType,
+    selectedCategory,
+    fetchProjects
+  ]);
+
+  const handleLogin = (event) => {
+    event.preventDefault();
 
     if (username.trim()) {
       setIsLoggedIn(true);
     }
   };
 
-  // Add project
-  const handleAddProject = async (e) => {
-    e.preventDefault();
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setProjects([]);
+    setAllProjects([]);
+    setAnalytics(null);
+    setDailyData(null);
+    setError('');
+  };
+
+  const handleAddProject = async (event) => {
+    event.preventDefault();
+    setAddingProject(true);
+    setError('');
 
     try {
-      const response = await fetch(
-        'http://127.0.0.1:8000/projects',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            title,
-            original_url: originalUrl,
-            description
-          })
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          original_url: originalUrl.trim(),
+          description: description.trim()
+        })
+      });
 
-      if (response.ok) {
-        setTitle('');
-        setOriginalUrl('');
-        setDescription('');
-        await fetchProjects();
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        alert(errorData.detail || 'Failed to add project');
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
       }
-    } catch (error) {
-      console.error('Error adding project:', error);
-      alert('Could not connect to the backend.');
+
+      setTitle('');
+      setOriginalUrl('');
+      setDescription('');
+      await refreshDashboard();
+    } catch (requestError) {
+      console.error('Error adding project:', requestError);
+      alert(requestError.message || 'Could not add the project.');
+    } finally {
+      setAddingProject(false);
     }
   };
 
-  // Delete project
   const handleDeleteProject = async (id) => {
-    if (!window.confirm('Delete this project record?')) {
-      return;
-    }
+    if (!window.confirm('Delete this project record?')) return;
 
     try {
-      const response = await fetch(
-        `http://127.0.0.1:8000/projects/${id}`,
-        { method: 'DELETE' }
-      );
+      const response = await fetch(`${API_BASE_URL}/projects/${id}`, {
+        method: 'DELETE'
+      });
 
-      if (response.ok) {
-        await fetchProjects();
-      } else {
-        alert('Failed to delete project');
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
       }
-    } catch (error) {
-      console.error('Error deleting project:', error);
-      alert('Could not connect to the backend.');
+
+      await refreshDashboard();
+    } catch (requestError) {
+      console.error('Error deleting project:', requestError);
+      alert(requestError.message || 'Could not delete the project.');
     }
   };
 
-  // Get unique project types
-  const projectTypes = [
-    ...new Set(
-      projects
+  const projectTypes = useMemo(() => (
+    [...new Set(
+      allProjects
         .map((project) => project.project_type)
-        .filter(
-          (value) =>
-            typeof value === 'string' && value.trim() !== ''
-        )
-    )
-  ].sort();
+        .filter((value) => typeof value === 'string' && value.trim())
+    )].sort()
+  ), [allProjects]);
 
-  // Get unique categories
-  const categories = [
-    ...new Set(
-      projects
+  const categories = useMemo(() => (
+    [...new Set(
+      allProjects
         .map((project) => project.category)
-        .filter(
-          (value) =>
-            typeof value === 'string' && value.trim() !== ''
-        )
-    )
-  ].sort();
+        .filter((value) => typeof value === 'string' && value.trim())
+    )].sort()
+  ), [allProjects]);
 
-  // Search and filter projects
-  const filteredProjects = projects.filter((project) => {
-    const search = searchTerm.trim().toLowerCase();
-
-    const projectTitle = String(
-      project.title || ''
-    ).toLowerCase();
-
-    const projectDescription = String(
-      project.description || ''
-    ).toLowerCase();
-
-    const matchesSearch =
-      projectTitle.includes(search) ||
-      projectDescription.includes(search);
-
-    const matchesType =
-      selectedType === 'All' ||
-      String(project.project_type || '').toLowerCase() ===
-        selectedType.toLowerCase();
-
-    const matchesCategory =
-      selectedCategory === 'All' ||
-      String(project.category || '').toLowerCase() ===
-        selectedCategory.toLowerCase();
-
-    return matchesSearch && matchesType && matchesCategory;
-  });
-
-  // Classify project types for statistics
-  const getTypeFlags = (project) => {
-    const type = String(
-      project.project_type || ''
-    ).toLowerCase();
-
-    const isBoth =
-      type.includes('both') ||
-      (
-        type.includes('web') &&
-        (type.includes('app') || type.includes('mobile'))
-      );
-
-    return {
-      isBoth,
-      isWeb: type.includes('web') && !isBoth,
-      isApp:
-        (type.includes('app') || type.includes('mobile')) &&
-        !isBoth
-    };
-  };
-
-  // Dashboard statistics
-  const totalProjects = projects.length;
-
-  const webProjects = projects.filter(
-    (project) => getTypeFlags(project).isWeb
-  ).length;
-
-  const appProjects = projects.filter(
-    (project) => getTypeFlags(project).isApp
-  ).length;
-
-  const bothProjects = projects.filter(
-    (project) => getTypeFlags(project).isBoth
-  ).length;
-
-  const duplicateProjects = projects.filter(
+  const duplicateProjects = allProjects.filter(
     (project) => project.is_duplicate === true
   ).length;
 
-  // Export the current search/filter results as CSV
-  const handleExportCSV = () => {
-    if (filteredProjects.length === 0) {
-      alert('There are no projects to export.');
-      return;
-    }
+  const typeCounts = analytics?.projects_by_type || {};
+  const runCounts = analytics?.scraping_runs || {};
 
-    const columns = [
-      { key: 'id', label: 'Project ID' },
-      { key: 'source_id', label: 'Source ID' },
-      { key: 'title', label: 'Title' },
-      { key: 'description', label: 'Description' },
-      { key: 'project_type', label: 'Project Type' },
-      { key: 'required_technology', label: 'Required Technologies' },
-      { key: 'client_name', label: 'Client Name' },
-      { key: 'location', label: 'Location' },
-      { key: 'budget', label: 'Budget' },
-      { key: 'currency', label: 'Currency' },
-      { key: 'posted_date', label: 'Posted Date' },
-      { key: 'deadline', label: 'Deadline' },
-      { key: 'original_url', label: 'Original URL' },
-      { key: 'content_info', label: 'Content Info' },
-      { key: 'category', label: 'Category' },
-      { key: 'confidence_score', label: 'Confidence Score' },
-      { key: 'is_duplicate', label: 'Is Duplicate' },
-      { key: 'created_at', label: 'Created At' }
-    ];
+  const stats = [
+    { label: 'Total Projects', value: analytics?.total_projects ?? '—' },
+    { label: 'Projects Today', value: analytics?.projects_today ?? '—' },
+    { label: 'Web Projects', value: typeCounts.Web ?? 0 },
+    { label: 'App Projects', value: typeCounts.App ?? 0 },
+    { label: 'Web & App Projects', value: typeCounts.Both ?? 0 },
+    { label: 'Duplicate Projects', value: duplicateProjects }
+  ];
 
-    // Escape commas, quotes and newlines correctly for CSV
-    const csvValue = (value) => {
-      let text = '';
+  const handleExportCSV = async () => {
+    setExporting(true);
 
-      if (value !== null && value !== undefined) {
-        text =
-          typeof value === 'object'
-            ? JSON.stringify(value)
-            : String(value);
+    try {
+      const params = new URLSearchParams();
+      const search = searchTerm.trim();
+
+      if (search) params.set('search', search);
+      if (selectedType !== 'All') params.set('project_type', selectedType);
+      if (selectedCategory !== 'All') params.set('category', selectedCategory);
+
+      const response = await fetch(
+        `${API_BASE_URL}/projects/export?${params.toString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
       }
 
-      return `"${text.replace(/"/g, '""')}"`;
-    };
+      const blob = await response.blob();
 
-    const headerRow = columns
-      .map((column) => csvValue(column.label))
-      .join(',');
+      if (blob.size === 0) {
+        alert('There are no projects matching the current filters.');
+        return;
+      }
 
-    const dataRows = filteredProjects.map((project) =>
-      columns
-        .map((column) => csvValue(project[column.key]))
-        .join(',')
-    );
-
-    // BOM helps Excel display UTF-8 text correctly
-    const csvContent =
-      '\uFEFF' + [headerRow, ...dataRows].join('\r\n');
-
-    const blob = new Blob([csvContent], {
-      type: 'text/csv;charset=utf-8;'
-    });
-
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-
-    link.href = url;
-    link.download =
-      `project-discovery-${new Date().toISOString().slice(0, 10)}.csv`;
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `scrapescout-projects-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (requestError) {
+      console.error('Error exporting projects:', requestError);
+      alert(requestError.message || 'Unable to export projects.');
+    } finally {
+      setExporting(false);
+    }
   };
 
-  // Login screen
+  const handleDailyDateChange = (event) => {
+    const newDate = event.target.value;
+    setDailyDate(newDate);
+    if (newDate) fetchDailyOpportunities(newDate);
+  };
+
+  const loadMoreProjects = () => {
+    if (!loading && hasMore) {
+      fetchProjects(offset + PAGE_SIZE, true);
+    }
+  };
+
   if (!isLoggedIn) {
     return (
       <div className="login-container">
         <div className="login-card">
-          <h2>Project Discovery</h2>
-          <p>Sign in to manage scraped opportunities</p>
+          <h2>ScrapeScout</h2>
+          <p>Sign in to manage discovered opportunities</p>
 
           <form onSubmit={handleLogin}>
             <div className="form-group">
@@ -316,7 +383,7 @@ function App() {
                 type="text"
                 placeholder="Enter Username"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(event) => setUsername(event.target.value)}
                 required
               />
             </div>
@@ -325,162 +392,231 @@ function App() {
               Access Workspace
             </button>
           </form>
+          <p className="login-note">
+            This is the existing frontend-only login screen.
+          </p>
         </div>
       </div>
     );
   }
 
-  // Dashboard
   return (
     <div className="dashboard-container">
       <header className="navbar">
         <div className="brand">
-          <div className="brand-icon">PD</div>
-          <h2>Project Discovery Engine</h2>
+          <div className="brand-icon">SS</div>
+          <h2>ScrapeScout</h2>
         </div>
 
         <div className="user-controls">
           <span className="user-badge">
             User: <strong>{username}</strong>
           </span>
-
-          <button
-            className="logout-btn"
-            onClick={() => setIsLoggedIn(false)}
-          >
+          <button className="logout-btn" onClick={handleLogout}>
             Sign Out
           </button>
         </div>
       </header>
 
-      {/* Statistics Cards */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: '16px',
-          margin: '20px 0'
-        }}
-      >
-        {[
-          { label: 'Total Projects', value: totalProjects },
-          { label: 'Web Projects', value: webProjects },
-          { label: 'App Projects', value: appProjects },
-          { label: 'Web & App Projects', value: bothProjects },
-          { label: 'Duplicate Projects', value: duplicateProjects }
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            style={{
-              border: '1px solid #e5e7eb',
-              borderRadius: '12px',
-              padding: '18px',
-              background: 'white'
-            }}
-          >
-            <p style={{ margin: '0 0 10px', color: '#6b7280' }}>
-              {stat.label}
-            </p>
-            <h2 style={{ margin: 0, color: '#111827' }}>
-              {stat.value}
-            </h2>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+          <button onClick={() => setError('')} aria-label="Dismiss error">
+            ×
+          </button>
+        </div>
+      )}
+
+      <section className="stats-grid" aria-label="Dashboard statistics">
+        {stats.map((stat) => (
+          <div className="stat-card" key={stat.label}>
+            <p>{stat.label}</p>
+            <h2>{analyticsLoading && stat.value === '—' ? '...' : stat.value}</h2>
           </div>
         ))}
-      </div>
+      </section>
+
+      <section className="run-summary">
+        <div>
+          <span className="run-label">Scraping Runs</span>
+          <strong>{runCounts.total ?? '—'}</strong>
+        </div>
+        <div>
+          <span className="run-label">Successful</span>
+          <strong className="success-text">{runCounts.successful ?? 0}</strong>
+        </div>
+        <div>
+          <span className="run-label">Failed</span>
+          <strong className="failure-text">{runCounts.failed ?? 0}</strong>
+        </div>
+        <div>
+          <span className="run-label">Running</span>
+          <strong>{runCounts.running ?? 0}</strong>
+        </div>
+      </section>
+
+      <section className="source-summary panel">
+        <h3 className="panel-title">Projects by Source</h3>
+        {analytics?.projects_by_source?.length ? (
+          <div className="source-list">
+            {analytics.projects_by_source.map((source) => (
+              <div className="source-item" key={source.source_name}>
+                <span>{source.source_name}</span>
+                <strong>{source.project_count}</strong>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted-text">
+            {analyticsLoading ? 'Loading source statistics...' : 'No source statistics available.'}
+          </p>
+        )}
+      </section>
+
+      <section className="daily-panel panel">
+        <div className="daily-heading">
+          <div>
+            <h3 className="panel-title">
+              {dailyData?.title || 'Daily Project Opportunities'}
+            </h3>
+            <p className="muted-text">
+              Daily compilation uses the Asia/Kolkata calendar date.
+            </p>
+          </div>
+
+          <div className="date-control">
+            <label htmlFor="dailyDate">Select date</label>
+            <input
+              id="dailyDate"
+              type="date"
+              value={dailyDate}
+              onChange={handleDailyDateChange}
+            />
+          </div>
+        </div>
+
+        {dailyLoading ? (
+          <p className="empty-state">Loading daily opportunities...</p>
+        ) : dailyError ? (
+          <p className="error-text">{dailyError}</p>
+        ) : dailyData ? (
+          <>
+            <div className="daily-meta">
+              <strong>{dailyData.total_projects} opportunities</strong>
+              <span>{dailyData.is_historical ? 'Historical results' : "Today's results"}</span>
+              <span>{dailyData.timezone}</span>
+            </div>
+
+            {dailyData.projects?.length ? (
+              <div className="daily-project-list">
+                {dailyData.projects.map((project) => (
+                  <article className="daily-project" key={project.id}>
+                    <div>
+                      <h4>{formatField(project.title)}</h4>
+                      <p>{formatField(project.description)}</p>
+                      <span className="daily-project-type">
+                        {formatField(project.project_type)}
+                      </span>
+                    </div>
+                    {project.original_url && (
+                      <a
+                        href={project.original_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="link-btn"
+                      >
+                        View Source ↗
+                      </a>
+                    )}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-state">
+                No non-duplicate opportunities were found for this date.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="empty-state">Select a date to view its opportunities.</p>
+        )}
+      </section>
 
       <div className="content-grid">
-        {/* Add Project Form */}
         <aside className="panel">
           <h3 className="panel-title">Add Opportunity</h3>
 
           <form onSubmit={handleAddProject}>
             <div className="form-group">
-              <label>Project Title</label>
+              <label htmlFor="projectTitle">Project Title</label>
               <input
+                id="projectTitle"
                 type="text"
                 placeholder="Enter project title"
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(event) => setTitle(event.target.value)}
                 required
               />
             </div>
 
             <div className="form-group">
-              <label>Source URL</label>
+              <label htmlFor="projectUrl">Source URL</label>
               <input
+                id="projectUrl"
                 type="url"
                 placeholder="https://example.com/project"
                 value={originalUrl}
-                onChange={(e) => setOriginalUrl(e.target.value)}
+                onChange={(event) => setOriginalUrl(event.target.value)}
                 required
               />
             </div>
 
             <div className="form-group">
-              <label>Description</label>
+              <label htmlFor="projectDescription">Description</label>
               <textarea
+                id="projectDescription"
                 placeholder="Brief project description"
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(event) => setDescription(event.target.value)}
               />
             </div>
 
-            <button type="submit" className="submit-btn">
-              + Add Record
+            <button type="submit" className="submit-btn" disabled={addingProject}>
+              {addingProject ? 'Adding...' : '+ Add Record'}
             </button>
           </form>
         </aside>
 
-        {/* Project Dashboard */}
         <main className="panel">
           <div className="panel-title">
             <span>Discovered Projects</span>
             <span className="count-badge">
-              {filteredProjects.length} Projects
+              {projects.length}{hasMore ? '+' : ''} loaded
             </span>
           </div>
 
-          {/* Search */}
-          <div
-            className="form-group"
-            style={{ marginBottom: '16px' }}
-          >
+          <div className="form-group">
+            <label htmlFor="projectSearch">Search projects</label>
             <input
+              id="projectSearch"
               type="text"
               placeholder="Search by title or description..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(event) => setSearchTerm(event.target.value)}
             />
           </div>
 
-          {/* Filters */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: '12px',
-              marginBottom: '16px'
-            }}
-          >
+          <div className="filters-grid">
             <div className="form-group">
               <label htmlFor="projectTypeFilter">Project Type</label>
               <select
                 id="projectTypeFilter"
                 value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  marginTop: '6px',
-                  borderRadius: '8px'
-                }}
+                onChange={(event) => setSelectedType(event.target.value)}
               >
                 <option value="All">All Project Types</option>
                 {projectTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
+                  <option key={type} value={type}>{type}</option>
                 ))}
               </select>
             </div>
@@ -490,160 +626,101 @@ function App() {
               <select
                 id="categoryFilter"
                 value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  marginTop: '6px',
-                  borderRadius: '8px'
-                }}
+                onChange={(event) => setSelectedCategory(event.target.value)}
               >
                 <option value="All">All Categories</option>
                 {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
+                  <option key={category} value={category}>{category}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* CSV Export */}
-          <div style={{ marginBottom: '20px' }}>
+          <div className="export-row">
             <button
               type="button"
+              className="export-btn"
               onClick={handleExportCSV}
-              disabled={filteredProjects.length === 0}
-              style={{
-                padding: '10px 16px',
-                border: 'none',
-                borderRadius: '8px',
-                background:
-                  filteredProjects.length === 0 ? '#9ca3af' : '#2563eb',
-                color: 'white',
-                cursor:
-                  filteredProjects.length === 0 ? 'not-allowed' : 'pointer',
-                fontWeight: '600'
-              }}
+              disabled={exporting}
             >
-              Export CSV ({filteredProjects.length})
+              {exporting ? 'Preparing CSV...' : 'Export CSV'}
             </button>
-            <p style={{ fontSize: '0.85rem', color: '#6b7280' }}>
-              Exports projects matching your current search and filters.
-            </p>
+            <p>Exports all projects matching the current search and filters.</p>
           </div>
 
-          {/* Project Cards */}
-          {loading ? (
+          {loading && projects.length === 0 ? (
             <p className="empty-state">Loading projects...</p>
-          ) : filteredProjects.length === 0 ? (
+          ) : projects.length === 0 ? (
             <p className="empty-state">No matching projects found.</p>
           ) : (
-            <div className="projects-grid">
-              {filteredProjects.map((proj) => (
-                <div key={proj.id} className="project-card">
-                  <div>
-                    <h4>{formatField(proj.title)}</h4>
-                    <p>{formatField(proj.description)}</p>
+            <>
+              <div className="projects-grid">
+                {projects.map((project) => (
+                  <article key={project.id} className="project-card">
+                    <div>
+                      <h4>{formatField(project.title)}</h4>
+                      <p>{formatField(project.description)}</p>
 
-                    <p>
-                      <strong>Project Type:</strong>{' '}
-                      {formatField(proj.project_type)}
-                    </p>
+                      <p><strong>Project Type:</strong> {formatField(project.project_type)}</p>
+                      <p><strong>Required Technologies:</strong> {formatField(project.required_technologies ?? project.required_technology)}</p>
+                      <p><strong>Client:</strong> {formatField(project.client_name)}</p>
+                      <p><strong>Location:</strong> {formatField(project.location)}</p>
+                      <p>
+                        <strong>Budget:</strong>{' '}
+                        {project.budget == null || project.budget === ''
+                          ? 'Not specified'
+                          : `${formatField(project.budget)} ${project.currency || ''}`.trim()}
+                      </p>
+                      <p><strong>Posted Date:</strong> {formatField(project.posted_date)}</p>
+                      <p><strong>Deadline:</strong> {formatField(project.deadline)}</p>
+                      <p><strong>Category:</strong> {formatField(project.category)}</p>
+                      <p><strong>Confidence Score:</strong> {formatField(project.confidence_score)}</p>
+                      <p>
+                        <strong>Duplicate:</strong>{' '}
+                        {project.is_duplicate == null
+                          ? 'Unknown'
+                          : project.is_duplicate ? 'Yes' : 'No'}
+                      </p>
+                      <p><strong>Additional Info:</strong> {formatField(project.content_info)}</p>
+                      <p><strong>Created At:</strong> {formatField(project.created_at)}</p>
+                    </div>
 
-                    <p>
-                      <strong>Required Technologies:</strong>{' '}
-                      {formatField(proj.required_technology)}
-                    </p>
+                    <div className="card-footer">
+                      {project.original_url && (
+                        <a
+                          href={project.original_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="link-btn"
+                        >
+                          View Source ↗
+                        </a>
+                      )}
 
-                    <p>
-                      <strong>Client:</strong>{' '}
-                      {formatField(proj.client_name)}
-                    </p>
-
-                    <p>
-                      <strong>Location:</strong>{' '}
-                      {formatField(proj.location)}
-                    </p>
-
-                    <p>
-                      <strong>Budget:</strong>{' '}
-                      {proj.budget == null || proj.budget === ''
-                        ? 'Not specified'
-                        : `${formatField(proj.budget)} ${
-                            proj.currency || ''
-                          }`.trim()}
-                    </p>
-
-                    <p>
-                      <strong>Posted Date:</strong>{' '}
-                      {formatField(proj.posted_date)}
-                    </p>
-
-                    <p>
-                      <strong>Deadline:</strong>{' '}
-                      {formatField(proj.deadline)}
-                    </p>
-
-                    <p>
-                      <strong>Category:</strong>{' '}
-                      {formatField(proj.category)}
-                    </p>
-
-                    <p>
-                      <strong>Confidence Score:</strong>{' '}
-                      {formatField(proj.confidence_score)}
-                    </p>
-
-                    <p>
-                      <strong>Duplicate:</strong>{' '}
-                      {proj.is_duplicate == null
-                        ? 'Unknown'
-                        : proj.is_duplicate
-                          ? 'Yes'
-                          : 'No'}
-                    </p>
-
-                    <p>
-                      <strong>Additional Info:</strong>{' '}
-                      {formatField(proj.content_info)}
-                    </p>
-
-                    <p>
-                      <strong>Created At:</strong>{' '}
-                      {formatField(proj.created_at)}
-                    </p>
-                  </div>
-
-                  <div className="card-footer">
-                    {proj.original_url && (
-                      <a
-                        href={proj.original_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="link-btn"
+                      <button
+                        className="delete-btn"
+                        onClick={() => handleDeleteProject(project.id)}
                       >
-                        Source Link ↗
-                      </a>
-                    )}
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
 
-                    <button
-                      onClick={() => handleDeleteProject(proj.id)}
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: '#ef4444',
-                        cursor: 'pointer',
-                        fontSize: '0.8rem',
-                        fontWeight: '600'
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
+              {hasMore && (
+                <div className="load-more-row">
+                  <button
+                    type="button"
+                    className="load-more-btn"
+                    onClick={loadMoreProjects}
+                    disabled={loading}
+                  >
+                    {loading ? 'Loading...' : 'Load More Projects'}
+                  </button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </main>
       </div>

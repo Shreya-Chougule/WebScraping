@@ -17,7 +17,7 @@ from supabase import create_client, Client
 
 logger = logging.getLogger("scrapescout.api")
 
-from schemas import (
+from backend.schemas import (
     ProjectCreate,
     ProjectUpdate,
     ProjectResponse,
@@ -1228,3 +1228,4 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=8000,
     )
+
