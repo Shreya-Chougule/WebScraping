@@ -7,7 +7,8 @@ from src.extraction_schema import ExtractedProject
 
 VALID_PROJECT_TYPES = {
     "Web",
-    "Mobile App",
+    "App",
+    "Mobile App",  # Accepted for backward compatibility
     "Software",
     "Both",
 }

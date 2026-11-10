@@ -103,6 +103,20 @@ def test_invalid_project_type_is_detected():
     assert any("Project type" in error for error in errors)
 
 
+def test_app_project_type_passes_validation():
+    project = sample_project()
+    project.project_type = "App"
+
+    assert validate_project(project) == []
+
+
+def test_mobile_app_legacy_value_passes_validation():
+    project = sample_project()
+    project.project_type = "Mobile App"
+
+    assert validate_project(project) == []
+
+
 def test_invalid_technology_value_is_detected():
     project = sample_project()
     project.technologies = ["Python", ""]

@@ -1,3 +1,4 @@
+
 import json
 import re
 from html import unescape
@@ -8,7 +9,6 @@ from urllib.parse import urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 
 from src.classifier import ProjectClassifier
-
 from src.extraction_schema import ExtractedProject
 
 
@@ -30,12 +30,20 @@ def infer_truelancer_project_type(
     description: str | None,
     technologies: list[str],
 ) -> str | None:
-    """Infer project type conservatively, avoiding incidental mentions."""
+    """
+    Infer project type from explicit title, description, and skill evidence.
+
+    Supported values: Web, App, Software, Both, or None.
+    """
 
     title_text = title.lower()
     description_text = (description or "").lower()
+    technology_text = " ".join(technologies or []).lower()
 
-    web_patterns = (
+    def matches(patterns: tuple[str, ...], value: str) -> bool:
+        return any(re.search(pattern, value) for pattern in patterns)
+
+    web_title_patterns = (
         r"\bweb\s+app(?:lication)?\b",
         r"\bweb\s+development\b",
         r"\bwebsite\s+(?:development|design|redesign|creation)\b",
@@ -44,17 +52,19 @@ def infer_truelancer_project_type(
         r"\bweb\s+portal\b",
         r"\bwebsite\s+developer\b",
         r"\bweb\s+developer\b",
+        r"\bweb\s+designer\b",
     )
 
-    mobile_patterns = (
+    app_title_patterns = (
         r"\bmobile\s+app(?:lication)?\b",
         r"\bandroid\s+app(?:lication)?\b",
         r"\bios\s+app(?:lication)?\b",
         r"\biphone\s+app(?:lication)?\b",
-        r"\bmobile\s+app\s+development\b",
+        r"\bflutter\s+app(?:lication)?\b",
+        r"\breact\s+native\s+app(?:lication)?\b",
     )
 
-    software_patterns = (
+    software_title_patterns = (
         r"\bdesktop\s+application\b",
         r"\bdesktop\s+software\b",
         r"\bwindows\s+application\b",
@@ -62,55 +72,113 @@ def infer_truelancer_project_type(
         r"\bsoftware\s+application\b",
     )
 
-    def matches(patterns: tuple[str, ...], value: str) -> bool:
-        return any(re.search(pattern, value) for pattern in patterns)
-
-    # Strong evidence in the project title takes priority.
-    title_web = matches(web_patterns, title_text)
-    title_mobile = matches(mobile_patterns, title_text)
-    title_software = matches(software_patterns, title_text)
-
-    if title_web and title_mobile:
-        return "Both"
-
-    if title_web:
-        return "Web"
-
-    if title_mobile:
-        return "Mobile App"
-
-    if title_software:
-        return "Software"
-
-    # Description-only classification requires stronger wording:
-    # the project must explicitly request development or creation.
-    web_request_patterns = (
-        r"\b(?:develop|build|create|design)\b.{0,80}\b(?:website|web\s+app|web\s+application|web\s+portal)\b",
-        r"\b(?:website|web\s+app|web\s+application|web\s+portal)\b.{0,80}\b(?:develop|build|create|redesign)\b",
+    web_skill_patterns = (
+        r"\bweb\s+development\b",
+        r"\bweb\s+design\b",
+        r"\bwebsite\s+development\b",
+        r"\bwebsite\s+design\b",
+        r"\bfrontend\s+development\b",
+        r"\bfront-end\s+development\b",
+        r"\bweb\s+application\s+development\b",
+        r"\bweb\s+app\s+development\b",
+        r"\breact(?:\.js)?\b(?!\s*native)",
+        r"\bangular(?:\.js)?\b",
+        r"\bvue(?:\.js)?\b",
+        r"\bwordpress\b",
+        r"\bshopify\b",
     )
 
-    mobile_request_patterns = (
-        r"\b(?:develop|build|create)\b.{0,80}\b(?:mobile|android|ios|iphone)\s+app\b",
-        r"\b(?:mobile|android|ios|iphone)\s+app\b.{0,80}\b(?:develop|build|create)\b",
+    app_skill_patterns = (
+        r"\bmobile\s+app(?:lication)?\s+development\b",
+        r"\bandroid\s+app(?:lication)?\s+development\b",
+        r"\bios\s+app(?:lication)?\s+development\b",
+        r"\biphone\s+app(?:lication)?\s+development\b",
+        r"\bflutter\s+app(?:lication)?\s+development\b",
+        r"\breact\s+native\s+app(?:lication)?\s+development\b",
+        r"\bandroid\s+development\b",
+        r"\bios\s+development\b",
+        r"\breact\s+native\b",
     )
 
-    software_request_patterns = (
-        r"\b(?:develop|build|create)\b.{0,80}\b(?:desktop|windows)\s+(?:application|software)\b",
-        r"\b(?:desktop|windows)\s+(?:application|software)\b.{0,80}\b(?:develop|build|create)\b",
+    software_skill_patterns = (
+        r"\bsoftware\s+development\b",
+        r"\bdesktop\s+application\s+development\b",
+        r"\bdesktop\s+software\s+development\b",
+        r"\bwindows\s+application\s+development\b",
     )
 
-    has_web = matches(web_request_patterns, description_text)
-    has_mobile = matches(mobile_request_patterns, description_text)
-    has_software = matches(software_request_patterns, description_text)
+    web_description_patterns = (
+        r"\b(?:develop\w*|build\w*|create\w*|design\w*|redesign\w*)\b"
+        r".{0,100}\b(?:website|web\s+app(?:lication)?|web\s+portal)\b",
+        r"\b(?:website|web\s+app(?:lication)?|web\s+portal)\b"
+        r".{0,100}\b(?:develop\w*|build\w*|create\w*|design\w*|redesign\w*)\b",
+    )
 
-    if has_web and has_mobile:
+    app_description_patterns = (
+        r"\b(?:develop|build|create)\b"
+        r".{0,100}\b(?:mobile|android|ios|iphone)\s+app(?:lication)?\b",
+        r"\b(?:mobile|android|ios|iphone)\s+app(?:lication)?\b"
+        r".{0,100}\b(?:develop|build|create)\b",
+        r"\b(?:develop|build|create)\b"
+        r".{0,100}\bflutter\s+app(?:lication)?\b",
+        r"\b(?:develop|build|create)\b"
+        r".{0,100}\breact\s+native\s+app(?:lication)?\b",
+    )
+
+    software_description_patterns = (
+        r"\b(?:develop|build|create)\b"
+        r".{0,100}\b(?:desktop|windows)\s+(?:application|software)\b",
+        r"\b(desktop|windows)\s+(?:application|software)\b"
+        r".{0,100}\b(?:develop|build|create)\b",
+    )
+
+    # Collect evidence from all fields before deciding.
+    has_web = (
+        matches(web_title_patterns, title_text)
+        or matches(web_skill_patterns, technology_text)
+        or matches(web_description_patterns, description_text)
+    )
+
+    has_app = (
+        matches(app_title_patterns, title_text)
+        or matches(app_skill_patterns, technology_text)
+        or matches(app_description_patterns, description_text)
+    )
+
+    has_software = (
+        matches(software_title_patterns, title_text)
+        or matches(software_skill_patterns, technology_text)
+        or matches(software_description_patterns, description_text)
+    )
+
+    # Prevent sales and marketing jobs from being classified as Web
+    # just because the description mentions website development services.
+    sales_or_marketing_role = matches(
+        (
+            r"\bsales\b",
+            r"\blead\s+generation\b",
+            r"\bmarketing\b",
+            r"\bseo\s+specialist\b",
+            r"\bsalesperson\b",
+        ),
+        title_text,
+    )
+
+    if (
+        sales_or_marketing_role
+        and not matches(web_title_patterns, title_text)
+        and not matches(web_skill_patterns, technology_text)
+    ):
+        has_web = False
+
+    if has_web and has_app:
         return "Both"
 
     if has_web:
         return "Web"
 
-    if has_mobile:
-        return "Mobile App"
+    if has_app:
+        return "App"
 
     if has_software:
         return "Software"
@@ -138,8 +206,9 @@ def canonicalize_url(url: str | None) -> str | None:
 
     path = parts.path.rstrip("/")
 
+    # Normalize both www and non-www URLs to one hostname.
     return urlunsplit(
-        ("https", hostname, path, "", "")
+        ("https", "truelancer.com", path, "", "")
     ).lower()
 
 
@@ -239,6 +308,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
         country = record.get("countryObj")
         location = None
+
         if isinstance(country, dict):
             location = clean_text(country.get("name"))
 
@@ -282,6 +352,7 @@ def parse_truelancer_file(
 ) -> list[ExtractedProject]:
     """Parse a saved HTML file without making network requests."""
     path = Path(file_path)
+
     html = path.read_text(
         encoding="utf-8",
         errors="replace",

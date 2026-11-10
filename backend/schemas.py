@@ -1,8 +1,9 @@
+
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================
@@ -10,20 +11,32 @@ from pydantic import BaseModel, Field
 # ============================================================
 
 class SourceBase(BaseModel):
-    name: str
-    base_url: str
+    name: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)
+    scraping_type: Optional[str] = None
+    scraping_rules: Optional[Dict[str, Any]] = None
+    frequency_minutes: Optional[int] = Field(default=None, gt=0)
+    is_active: Optional[bool] = True
 
 
 class SourceCreate(SourceBase):
     pass
 
 
+class SourceUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1)
+    base_url: Optional[str] = Field(default=None, min_length=1)
+    scraping_type: Optional[str] = None
+    scraping_rules: Optional[Dict[str, Any]] = None
+    frequency_minutes: Optional[int] = Field(default=None, gt=0)
+    is_active: Optional[bool] = None
+
+
 class SourceResponse(SourceBase):
     id: UUID
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============================================================
@@ -35,19 +48,14 @@ class ProjectBase(BaseModel):
     original_url: str
     description: Optional[str] = None
     source_id: Optional[UUID] = None
-
     project_type: Optional[str] = None
     required_technologies: Optional[List[str]] = None
-
     client_name: Optional[str] = None
     location: Optional[str] = None
-
     budget: Optional[str] = None
     currency: Optional[str] = None
-
     posted_date: Optional[datetime] = None
     deadline: Optional[datetime] = None
-
     contact_info: Optional[str] = None
     category: Optional[str] = None
     confidence_score: Optional[float] = None
@@ -57,18 +65,30 @@ class ProjectCreate(ProjectBase):
     pass
 
 
-class ProjectResponse(ProjectBase):
-    id: UUID
-
-    # Classification and duplicate-detection fields
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1)
+    original_url: Optional[str] = Field(default=None, min_length=1)
+    description: Optional[str] = None
+    source_id: Optional[UUID] = None
+    project_type: Optional[str] = None
+    required_technologies: Optional[List[str]] = None
+    client_name: Optional[str] = None
+    location: Optional[str] = None
+    budget: Optional[str] = None
+    currency: Optional[str] = None
+    posted_date: Optional[datetime] = None
+    deadline: Optional[datetime] = None
+    contact_info: Optional[str] = None
     category: Optional[str] = None
     confidence_score: Optional[float] = None
-    is_duplicate: Optional[bool] = None
 
+
+class ProjectResponse(ProjectBase):
+    id: UUID
+    is_duplicate: Optional[bool] = None
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============================================================
@@ -76,19 +96,27 @@ class ProjectResponse(ProjectBase):
 # ============================================================
 
 class KeywordBase(BaseModel):
-    keyword: str
+    keyword: str = Field(min_length=1)
+    category: Optional[str] = None
+    is_active: Optional[bool] = True
 
 
 class KeywordCreate(KeywordBase):
     pass
 
 
+class KeywordUpdate(BaseModel):
+    keyword: Optional[str] = Field(default=None, min_length=1)
+    category: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class KeywordResponse(KeywordBase):
     id: UUID
+    keyword: str = Field(validation_alias="phrase")
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============================================================
@@ -115,5 +143,4 @@ class ScrapingRunResponse(BaseModel):
     records_found: Optional[int] = 0
     error_log: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

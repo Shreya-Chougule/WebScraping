@@ -1,12 +1,14 @@
+
 import importlib.util
 import os
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
@@ -136,3 +138,77 @@ def test_update_scraping_run_endpoint_returns_404(backend):
         )
 
     assert exc_info.value.status_code == 404
+
+
+def test_scraping_run_patch_rejects_malformed_uuid(backend):
+    module, _ = backend
+    client = TestClient(module.app)
+
+    response = client.patch(
+        "/scraping-runs/not-a-valid-uuid",
+        json={
+            "status": "SUCCESS",
+            "records_found": 10,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_scraping_run_patch_rejects_invalid_status(backend):
+    module, _ = backend
+    client = TestClient(module.app)
+
+    response = client.patch(
+        f"/scraping-runs/{uuid4()}",
+        json={
+            "status": "RUNNING",
+            "records_found": 10,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_scraping_run_patch_rejects_negative_records_found(backend):
+    module, _ = backend
+    client = TestClient(module.app)
+
+    response = client.patch(
+        f"/scraping-runs/{uuid4()}",
+        json={
+            "status": "FAILED",
+            "records_found": -1,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_scraping_run_create_rejects_missing_source_id(backend):
+    module, _ = backend
+    client = TestClient(module.app)
+
+    response = client.post(
+        "/scraping-runs",
+        json={
+            "status": "RUNNING",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_scraping_run_create_rejects_invalid_source_id(backend):
+    module, _ = backend
+    client = TestClient(module.app)
+
+    response = client.post(
+        "/scraping-runs",
+        json={
+            "source_id": "not-a-uuid",
+            "status": "RUNNING",
+        },
+    )
+
+    assert response.status_code == 422

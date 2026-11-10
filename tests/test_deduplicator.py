@@ -1,15 +1,22 @@
 import pytest
+
 from src.deduplicator import ProjectDeduplicator
 
-def test_deduplicator_matching():
-    deduplicator = ProjectDeduplicator(similarity_threshold=85.0)
 
-    # Existing records in database / list
+def test_deduplicator_matching():
+    deduplicator = ProjectDeduplicator(
+        similarity_threshold=85.0,
+        description_similarity_threshold=70.0,
+    )
+
     existing_projects = [
         {
             "title": "Build a React Web Application",
-            "description": "We need a frontend developer using React and Tailwind CSS.",
-            "original_url": "https://example.com/project/1"
+            "description": (
+                "We need a frontend developer using "
+                "React and Tailwind CSS."
+            ),
+            "original_url": "https://example.com/project/1",
         }
     ]
 
@@ -17,40 +24,66 @@ def test_deduplicator_matching():
     new_project_url = {
         "title": "Completely Different Title",
         "description": "Some random description.",
-        "original_url": "https://example.com/project/1"
+        "original_url": "https://example.com/project/1",
     }
-    is_dup, reason = deduplicator.is_duplicate(new_project_url, existing_projects)
-    assert is_dup == True
+
+    is_dup, reason = deduplicator.is_duplicate(
+        new_project_url,
+        existing_projects,
+    )
+
+    assert is_dup is True
     assert "URL" in reason
 
-    # Test 2: Content Hash Match (Same title & description, different URL)
+    # Test 2: Content Hash Match
     new_project_hash = {
         "title": "Build a React Web Application",
-        "description": "We need a frontend developer using React and Tailwind CSS.",
-        "original_url": "https://example.com/project/2"
+        "description": (
+            "We need a frontend developer using "
+            "React and Tailwind CSS."
+        ),
+        "original_url": "https://example.com/project/2",
     }
-    is_dup, reason = deduplicator.is_duplicate(new_project_hash, existing_projects)
-    assert is_dup == True
+
+    is_dup, reason = deduplicator.is_duplicate(
+        new_project_hash,
+        existing_projects,
+    )
+
+    assert is_dup is True
     assert "Hash" in reason
 
-    # Test 3: Fuzzy Similarity Match (Very close variation of title)
+    # Test 3: Fuzzy Match with Similar Description
     new_project_fuzzy = {
-        "title": "Build a React Web Application!",  # Added exclamation/minor change
-        "description": "Different description text here.",
-        "original_url": "https://example.com/project/3"
+        "title": "Build a React Web Application!",
+        "description": (
+            "We need a front-end developer using "
+            "React and Tailwind CSS."
+        ),
+        "original_url": "https://example.com/project/3",
     }
-    is_dup, reason = deduplicator.is_duplicate(new_project_fuzzy, existing_projects)
-    assert is_dup == True
+
+    is_dup, reason = deduplicator.is_duplicate(
+        new_project_fuzzy,
+        existing_projects,
+    )
+
+    assert is_dup is True
     assert "Fuzzy" in reason
 
-    # Test 4: Completely Unique Project (No Duplicate)
+    # Test 4: Completely Unique Project
     new_project_unique = {
         "title": "Develop Mobile App with Flutter",
         "description": "Need an Android and iOS developer.",
-        "original_url": "https://example.com/project/4"
+        "original_url": "https://example.com/project/4",
     }
-    is_dup, reason = deduplicator.is_duplicate(new_project_unique, existing_projects)
-    assert is_dup == False
+
+    is_dup, reason = deduplicator.is_duplicate(
+        new_project_unique,
+        existing_projects,
+    )
+
+    assert is_dup is False
     assert reason is None
 
 
@@ -136,6 +169,95 @@ def test_missing_title_does_not_trigger_fuzzy_match():
                 "description": "Another different project",
             }
         ],
+    )
+
+    assert result is False
+    assert reason is None
+
+
+def test_similar_title_with_different_description_is_not_duplicate():
+    deduplicator = ProjectDeduplicator()
+
+    existing = [
+        {
+            "title": "Build a React Web Application",
+            "description": (
+                "Create a frontend website using React "
+                "and Tailwind CSS."
+            ),
+            "original_url": "https://example.com/project/1",
+        }
+    ]
+
+    new_project = {
+        "title": "Build a React Web Application!",
+        "description": (
+            "Develop a backend API using Python, "
+            "FastAPI, and PostgreSQL."
+        ),
+        "original_url": "https://example.com/project/2",
+    }
+
+    result, reason = deduplicator.is_duplicate(
+        new_project,
+        existing,
+    )
+
+    assert result is False
+    assert reason is None
+
+
+def test_fuzzy_matching_falls_back_when_description_is_missing():
+    deduplicator = ProjectDeduplicator()
+
+    existing = [
+        {
+            "title": "Build a React Web Application",
+            "description": None,
+        }
+    ]
+
+    new_project = {
+        "title": "Build a React Web Application!",
+        "description": "A new description",
+    }
+
+    result, reason = deduplicator.is_duplicate(
+        new_project,
+        existing,
+    )
+
+    assert result is True
+    assert "Fuzzy" in reason
+
+
+def test_fuzzy_matching_rejects_low_description_similarity():
+    deduplicator = ProjectDeduplicator(
+        similarity_threshold=85.0,
+        description_similarity_threshold=70.0,
+    )
+
+    existing = [
+        {
+            "title": "Develop a Mobile Application",
+            "description": (
+                "Create an Android application using Kotlin "
+                "with user authentication."
+            ),
+        }
+    ]
+
+    new_project = {
+        "title": "Develop a Mobile Application!",
+        "description": (
+            "Build a responsive business website using "
+            "React, CSS, and JavaScript."
+        ),
+    }
+
+    result, reason = deduplicator.is_duplicate(
+        new_project,
+        existing,
     )
 
     assert result is False

@@ -5,6 +5,23 @@ from src.extraction_schema import ExtractedProject
 
 NOT_SPECIFIED = "Not specified"
 
+PROJECT_TYPE_ALIASES = {
+    "mobile app": "App",
+}
+
+
+def normalize_project_type(value: str | None) -> str | None:
+    """Normalize project types to the values used by the dashboard."""
+    if not value or value.strip().casefold() == NOT_SPECIFIED.casefold():
+        return None
+
+    cleaned = value.strip()
+
+    return PROJECT_TYPE_ALIASES.get(
+        cleaned.casefold(),
+        cleaned,
+    )
+
 
 def convert_date(value: str | None) -> str | None:
     """Convert YYYY-MM-DD into an ISO datetime string."""
@@ -38,10 +55,7 @@ def map_project_to_supabase(
         "posted_date": convert_date(project.posted_date),
         "deadline": convert_date(project.deadline),
         "required_technologies": project.technologies,
-        "project_type": (
-            None if project.project_type == NOT_SPECIFIED
-            else project.project_type
-        ),
+        "project_type": normalize_project_type(project.project_type),
         "source_id": source_id,
         "original_url": project.original_url,
         "client_name": project.client_name,

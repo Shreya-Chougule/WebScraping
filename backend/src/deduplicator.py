@@ -1,4 +1,3 @@
-
 import hashlib
 from typing import List, Optional, Tuple
 
@@ -6,8 +5,15 @@ from rapidfuzz import fuzz
 
 
 class ProjectDeduplicator:
-    def __init__(self, similarity_threshold: float = 85.0):
+    def __init__(
+        self,
+        similarity_threshold: float = 85.0,
+        description_similarity_threshold: float = 70.0,
+    ):
         self.similarity_threshold = similarity_threshold
+        self.description_similarity_threshold = (
+            description_similarity_threshold
+        )
 
     @staticmethod
     def _clean(value: Optional[str]) -> str:
@@ -42,18 +48,24 @@ class ProjectDeduplicator:
         Check duplicates using:
         1. Exact URL
         2. Normalized content hash
-        3. Fuzzy title similarity
+        3. Fuzzy title similarity, with description verification
+           whenever both descriptions are available.
         """
         new_url = self._clean(new_project.get("original_url"))
         new_title = self._clean(new_project.get("title"))
-        new_description = self._clean(new_project.get("description"))
+        new_description = self._clean(
+            new_project.get("description")
+        )
 
         # Avoid false matches for records with no identifying content.
         if not new_title and not new_description and not new_url:
             return False, None
 
         new_hash = (
-            self.generate_content_hash(new_title, new_description)
+            self.generate_content_hash(
+                new_title,
+                new_description,
+            )
             if new_title or new_description
             else None
         )
@@ -64,10 +76,16 @@ class ProjectDeduplicator:
             )
 
             # 1. Exact URL match
-            if new_url and existing_url and new_url == existing_url:
+            if (
+                new_url
+                and existing_url
+                and new_url == existing_url
+            ):
                 return True, "Duplicate URL match"
 
-            existing_title = self._clean(existing.get("title"))
+            existing_title = self._clean(
+                existing.get("title")
+            )
             existing_description = self._clean(
                 existing.get("description")
             )
@@ -92,15 +110,45 @@ class ProjectDeduplicator:
 
             # 3. Fuzzy title similarity
             if new_title and existing_title:
-                similarity = fuzz.ratio(
+                title_similarity = fuzz.ratio(
                     new_title,
                     existing_title,
                 )
 
-                if similarity >= self.similarity_threshold:
+                if title_similarity < self.similarity_threshold:
+                    continue
+
+                # When both descriptions exist, verify that they
+                # are sufficiently similar before declaring a duplicate.
+                if new_description and existing_description:
+                    description_similarity = fuzz.ratio(
+                        new_description,
+                        existing_description,
+                    )
+
+                    if (
+                        description_similarity
+                        < self.description_similarity_threshold
+                    ):
+                        continue
+
                     return (
                         True,
-                        f"Fuzzy similarity match ({similarity:.1f}%)",
+                        (
+                            "Fuzzy similarity match "
+                            f"(title: {title_similarity:.1f}%, "
+                            f"description: "
+                            f"{description_similarity:.1f}%)"
+                        ),
                     )
+
+                # If either description is missing, use title similarity.
+                return (
+                    True,
+                    (
+                        "Fuzzy similarity match "
+                        f"(title: {title_similarity:.1f}%)"
+                    ),
+                )
 
         return False, None
