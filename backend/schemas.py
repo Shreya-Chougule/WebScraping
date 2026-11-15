@@ -144,3 +144,70 @@ class ScrapingRunResponse(BaseModel):
     error_log: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ============================================================
+# USER & AUTH SCHEMAS
+# ============================================================
+
+class UserLogin(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=6)
+
+
+class UserRegister(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=6)
+    full_name: Optional[str] = None
+
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["admin", "viewer"]
+
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    role: str = "viewer"
+    full_name: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+# ============================================================
+# NOTIFICATION SCHEMAS
+# ============================================================
+
+class NotificationCreate(BaseModel):
+    title: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    type: Literal["info", "success", "warning", "high_priority"] = "info"
+    user_id: Optional[str] = None
+    link: Optional[str] = None
+
+
+class NotificationResponse(BaseModel):
+    id: str
+    title: str
+    message: str
+    type: str = "info"
+    is_read: bool = False
+    user_id: Optional[str] = None
+    link: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationListResponse(BaseModel):
+    notifications: List[NotificationResponse]
+    unread_count: int
+    total: int

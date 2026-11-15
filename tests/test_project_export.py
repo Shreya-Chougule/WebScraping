@@ -205,3 +205,32 @@ def test_export_projects_returns_500_on_database_error(monkeypatch):
     )
 
     assert "database unavailable" not in detail
+
+
+def test_export_projects_returns_excel(monkeypatch):
+    import zipfile
+    project = sample_project()
+    fake = FakeSupabase(FakeQuery(data=[project]))
+    monkeypatch.setattr("main.supabase", fake)
+
+    response = client.get("/projects/export?format=excel")
+
+    assert response.status_code == 200
+    assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in response.headers["content-type"]
+    assert "attachment" in response.headers["content-disposition"]
+    assert "scrapescout_projects.xlsx" in response.headers["content-disposition"]
+
+    # Verify the response content is a valid ZIP archive containing worksheet
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        assert "xl/worksheets/sheet1.xml" in z.namelist()
+        sheet_xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        assert "Build a business website" in sheet_xml
+
+
+def test_export_projects_rejects_unsupported_format(monkeypatch):
+    fake = FakeSupabase(FakeQuery(data=[]))
+    monkeypatch.setattr("main.supabase", fake)
+
+    response = client.get("/projects/export?format=unsupported_format")
+    assert response.status_code == 422
+    assert "Unsupported export format" in response.json()["detail"]

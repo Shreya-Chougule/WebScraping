@@ -9,7 +9,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from supabase import create_client, Client
@@ -17,22 +17,110 @@ from supabase import create_client, Client
 
 logger = logging.getLogger("scrapescout.api")
 
-from backend.schemas import (
-    ProjectCreate,
-    ProjectUpdate,
-    ProjectResponse,
-    SourceCreate,
-    SourceUpdate,
-    SourceResponse,
-    KeywordCreate,
-    KeywordUpdate,
-    KeywordResponse,
-    ScrapingRunCreate,
-    ScrapingRunUpdate,
-    ScrapingRunResponse,
-)
+try:
+    from backend.schemas import (
+        ProjectCreate,
+        ProjectUpdate,
+        ProjectResponse,
+        SourceCreate,
+        SourceUpdate,
+        SourceResponse,
+        KeywordCreate,
+        KeywordUpdate,
+        KeywordResponse,
+        ScrapingRunCreate,
+        ScrapingRunUpdate,
+        ScrapingRunResponse,
+        UserLogin,
+        UserRegister,
+        UserResponse,
+        TokenResponse,
+        NotificationCreate,
+        NotificationResponse,
+        NotificationListResponse,
+    )
+    from backend.auth import (
+        CurrentUser,
+        create_access_token,
+        decode_access_token,
+        get_current_user,
+        require_admin,
+        require_authenticated,
+        hash_password,
+        verify_password,
+        get_local_user,
+        add_local_user,
+    )
+    from backend.notifications import (
+        create_notification,
+        list_notifications,
+        mark_as_read,
+        mark_all_as_read,
+        safe_notify,
+    )
+    from backend.security import (
+        is_rate_limited,
+        sanitize_csv_cell,
+    )
+    from backend.export_utils import (
+        generate_projects_xlsx,
+        get_export_filename,
+    )
+except ImportError:
+    from schemas import (
+        ProjectCreate,
+        ProjectUpdate,
+        ProjectResponse,
+        SourceCreate,
+        SourceUpdate,
+        SourceResponse,
+        KeywordCreate,
+        KeywordUpdate,
+        KeywordResponse,
+        ScrapingRunCreate,
+        ScrapingRunUpdate,
+        ScrapingRunResponse,
+        UserLogin,
+        UserRegister,
+        UserResponse,
+        TokenResponse,
+        NotificationCreate,
+        NotificationResponse,
+        NotificationListResponse,
+    )
+    from auth import (
+        CurrentUser,
+        create_access_token,
+        decode_access_token,
+        get_current_user,
+        require_admin,
+        require_authenticated,
+        hash_password,
+        verify_password,
+        get_local_user,
+        add_local_user,
+    )
+    from notifications import (
+        create_notification,
+        list_notifications,
+        mark_as_read,
+        mark_all_as_read,
+        safe_notify,
+    )
+    from security import (
+        is_rate_limited,
+        sanitize_csv_cell,
+    )
+    from export_utils import (
+        generate_projects_xlsx,
+        get_export_filename,
+    )
 
 
+try:
+    from backend.route_security import ProductionAuthMiddleware
+except ImportError:
+    from route_security import ProductionAuthMiddleware
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -47,12 +135,29 @@ app = FastAPI(title="Project Discovery Tool API")
 
 
 # ============================================================
+app.add_middleware(
+    ProductionAuthMiddleware,
+    auth_validator=get_current_user,
+)
 # CORS CONFIGURATION
 # ============================================================
 
+# Set FRONTEND_ORIGINS as a comma-separated list of trusted frontend
+# origins in production. Local React development URLs are the defaults.
+FRONTEND_ORIGINS = os.getenv(
+    "FRONTEND_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000",
+)
+
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in FRONTEND_ORIGINS.split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,17 +177,23 @@ def read_root():
 
 @app.get("/test-db")
 def test_db_connection():
+    """
+    Test database connectivity.
+    Returns only a safe connectivity status without returning actual project records
+    or sensitive database contents.
+    """
     try:
         response = (
             supabase.table("projects")
-            .select("*")
-            .limit(5)
+            .select("id")
+            .limit(1)
             .execute()
         )
 
         return {
             "status": "success",
-            "data": response.data,
+            "message": "Database connection healthy.",
+            "connected": True,
         }
 
     except Exception:
@@ -90,7 +201,251 @@ def test_db_connection():
         return {
             "status": "error",
             "message": "Database connection failed.",
+            "connected": False,
         }
+
+
+# ============================================================
+# AUTHENTICATION & ACCESS CONTROL ENDPOINTS (PHASE 14)
+# ============================================================
+
+@app.post(
+    "/auth/login",
+    response_model=TokenResponse,
+)
+def login(credentials: UserLogin, request: Request):
+    """
+    Authenticate a user via Supabase Auth or local store.
+    Issues a secure JWT access token with role permissions.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if is_rate_limited(client_ip, bucket="auth", limit=60, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many authentication attempts. Please try again shortly.",
+        )
+
+    email = credentials.email.strip().lower()
+    password = credentials.password
+
+    user_info = None
+    access_token = None
+
+    # 1. Attempt Supabase Auth login
+    try:
+        auth_response = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": password,
+        })
+        if auth_response and auth_response.user:
+            sb_user = auth_response.user
+            user_id = str(sb_user.id)
+            user_meta = getattr(sb_user, "user_metadata", {}) or {}
+            full_name = user_meta.get("full_name") or email.split("@")[0].title()
+            role = "viewer"
+
+            try:
+                user_record = supabase.table("users").select("*").eq("id", user_id).execute()
+                if user_record.data:
+                    database_role = user_record.data[0].get("role")
+                    if database_role in ("admin", "viewer"):
+                        role = database_role
+                    full_name = user_record.data[0].get("full_name", full_name)
+            except Exception:
+                pass
+
+            user_info = {
+                "id": user_id,
+                "email": email,
+                "role": role,
+                "full_name": full_name,
+            }
+    except Exception as exc:
+        logger.debug("Supabase sign in failed or unavailable: %s", exc)
+
+    # 2. Local accounts fallback (development, tests, demo)
+    if not user_info:
+        local_user = get_local_user(email)
+        if local_user and verify_password(password, local_user["password_hash"]):
+            user_info = {
+                "id": local_user["id"],
+                "email": local_user["email"],
+                "role": local_user["role"],
+                "full_name": local_user.get("full_name", ""),
+            }
+
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Consistently issue backend JWT access token signed with get_jwt_secret()
+    access_token = create_access_token({
+        "sub": user_info["id"],
+        "email": user_info["email"],
+        "role": user_info["role"],
+        "full_name": user_info.get("full_name"),
+    })
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_info,
+    }
+
+
+@app.post(
+    "/auth/register",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def register(user_data: UserRegister, request: Request):
+    """
+    Register a new user account with role assignment (default: viewer).
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if is_rate_limited(client_ip, bucket="auth", limit=30, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many registration attempts. Please try again shortly.",
+        )
+
+    email = user_data.email.strip().lower()
+    password = user_data.password
+    role = "viewer"
+    full_name = user_data.full_name or email.split("@")[0].title()
+
+    if get_local_user(email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email address already exists.",
+        )
+
+    user_info = None
+    access_token = None
+
+    # 1. Attempt Supabase Auth registration
+    try:
+        auth_response = supabase.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {
+                "data": {
+                    "full_name": full_name,
+                    "role": role,
+                }
+            }
+        })
+        if auth_response and auth_response.user:
+            sb_user = auth_response.user
+            user_id = str(sb_user.id)
+            user_info = {
+                "id": user_id,
+                "email": email,
+                "role": role,
+                "full_name": full_name,
+            }
+            try:
+                supabase.table("users").insert({
+                    "id": user_id,
+                    "email": email,
+                    "role": role,
+                    "full_name": full_name,
+                }).execute()
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.debug("Supabase sign up failed or unavailable: %s", exc)
+
+    # 2. Local fallback registration
+    if not user_info:
+        local_record = add_local_user(
+            email=email,
+            password=password,
+            role=role,
+            full_name=full_name,
+        )
+        user_info = {
+            "id": local_record["id"],
+            "email": local_record["email"],
+            "role": local_record["role"],
+            "full_name": local_record["full_name"],
+        }
+
+    # Consistently issue backend JWT access token signed with get_jwt_secret()
+    access_token = create_access_token({
+        "sub": user_info["id"],
+        "email": user_info["email"],
+        "role": user_info["role"],
+        "full_name": user_info["full_name"],
+    })
+
+    safe_notify(
+        title="New User Registered",
+        message=f"User {email} joined as {role}.",
+        notif_type="info",
+        client=supabase,
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_info,
+    }
+
+
+@app.get(
+    "/auth/me",
+    response_model=UserResponse,
+)
+def get_my_profile(current_user: CurrentUser = Depends(get_current_user)):
+    """Retrieve currently authenticated user profile and permissions."""
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role,
+        "full_name": current_user.full_name,
+    }
+
+
+@app.post("/auth/logout")
+def logout(current_user: CurrentUser = Depends(get_current_user)):
+    """Log out the current session."""
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+    return {"message": "Successfully logged out."}
+
+
+@app.get(
+    "/users",
+    response_model=List[UserResponse],
+)
+def list_users_endpoint(current_user: CurrentUser = Depends(require_admin)):
+    """Admin endpoint to list system users."""
+    try:
+        response = supabase.table("users").select("*").execute()
+        if response.data:
+            return response.data
+    except Exception:
+        pass
+    try:
+        from backend.auth import _local_users
+    except ImportError:
+        from auth import _local_users
+    return [
+        {
+            "id": u["id"],
+            "email": u["email"],
+            "role": u["role"],
+            "full_name": u.get("full_name"),
+            "created_at": None,
+        }
+        for u in _local_users.values()
+    ]
 
 
 # ============================================================
@@ -235,8 +590,18 @@ def export_projects_csv(
     category: Optional[str] = None,
     posted_from: Optional[datetime] = None,
     posted_to: Optional[datetime] = None,
+    format: str = Query(
+        default="csv",
+        description="Export format: 'csv' or 'excel'/'xlsx'",
+    ),
 ):
-    """Export matching projects from Supabase as a downloadable CSV."""
+    """Export matching projects from Supabase as a downloadable CSV or Excel spreadsheet."""
+
+    if format.lower() not in ("csv", "excel", "xlsx"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unsupported export format. Supported formats are 'csv' and 'excel'.",
+        )
 
     if posted_from and posted_to and posted_from > posted_to:
         raise HTTPException(
@@ -327,6 +692,16 @@ def export_projects_csv(
 
             offset += page_size
 
+        if format.lower() in ("excel", "xlsx"):
+            xlsx_content = generate_projects_xlsx(columns, projects)
+            return StreamingResponse(
+                iter([xlsx_content]),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": 'attachment; filename="scrapescout_projects.xlsx"'
+                },
+            )
+
         output = io.StringIO()
         writer = csv.DictWriter(
             output,
@@ -339,11 +714,7 @@ def export_projects_csv(
             row = {}
 
             for column in columns:
-                value = project.get(column)
-
-                if isinstance(value, (list, dict)):
-                    value = json.dumps(value, ensure_ascii=False)
-
+                value = sanitize_csv_cell(project.get(column))
                 row[column] = value
 
             writer.writerow(row)
@@ -429,7 +800,18 @@ def create_project(project: ProjectCreate):
                 detail="Project insertion returned no data.",
             )
 
-        return response.data[0]
+        new_project_record = response.data[0]
+        try:
+            safe_notify(
+                title="New Project Discovered",
+                message=f"Opportunity '{project.title}' was added to ScrapeScout.",
+                notif_type="info",
+                link=project.original_url,
+            )
+        except Exception:
+            pass
+
+        return new_project_record
 
     except HTTPException:
         raise
@@ -527,8 +909,11 @@ def update_project(
     "/projects/{project_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def delete_project(project_id: str):
-    """Delete a project."""
+def delete_project(
+    project_id: str,
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """Delete a project (Admin only)."""
     try:
         (
             supabase.table("projects")
@@ -1207,7 +1592,18 @@ def update_scraping_run_endpoint(
                 detail="Scraping run was not found.",
             )
 
-        return response.data[0]
+        updated_run = response.data[0]
+        try:
+            status_val = update_data.get("status", "UPDATED")
+            safe_notify(
+                title=f"Scraping Run {status_val.capitalize()}",
+                message=f"Scraping job completed with status {status_val}. {update_data.get('records_found', 0)} records found.",
+                notif_type="success" if status_val == "SUCCESS" else "warning",
+            )
+        except Exception:
+            pass
+
+        return updated_run
 
     except HTTPException:
         raise
@@ -1220,6 +1616,80 @@ def update_scraping_run_endpoint(
         )
 
 
+# ============================================================
+# NOTIFICATION ENDPOINTS (PHASE 15)
+# ============================================================
+
+@app.get(
+    "/notifications",
+    response_model=NotificationListResponse,
+)
+def get_user_notifications(
+    unread_only: bool = False,
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Retrieve notifications for the current user and system broadcasts."""
+    return list_notifications(
+        user_id=current_user.id,
+        role=current_user.role,
+        unread_only=unread_only,
+        limit=limit,
+        client=supabase,
+    )
+
+
+@app.patch("/notifications/{notification_id}/read")
+def mark_notification_as_read(
+    notification_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Mark a specific notification as read."""
+    success = mark_as_read(
+        notification_id=notification_id,
+        user_id=current_user.id,
+        client=supabase,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found.",
+        )
+    return {"status": "success", "id": notification_id}
+
+
+@app.post("/notifications/read-all")
+def mark_all_notifications_read(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Mark all unread notifications as read."""
+    marked_count = mark_all_as_read(
+        user_id=current_user.id,
+        client=supabase,
+    )
+    return {"status": "success", "marked_read": marked_count}
+
+
+@app.post(
+    "/notifications",
+    response_model=NotificationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_system_notification(
+    notification: NotificationCreate,
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """Admin endpoint to create a manual or broadcast notification."""
+    return create_notification(
+        title=notification.title,
+        message=notification.message,
+        notif_type=notification.type,
+        user_id=notification.user_id,
+        link=notification.link,
+        client=supabase,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -1228,4 +1698,3 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=8000,
     )
-
