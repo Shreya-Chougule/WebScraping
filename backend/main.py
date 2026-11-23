@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.openapi.utils import get_openapi
 from supabase import create_client, Client
 
 
@@ -118,9 +119,9 @@ except ImportError:
 
 
 try:
-    from backend.route_security import ProductionAuthMiddleware
+    from backend.route_security import ProductionAuthMiddleware, PUBLIC_PATHS
 except ImportError:
-    from route_security import ProductionAuthMiddleware
+    from route_security import ProductionAuthMiddleware, PUBLIC_PATHS
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -132,6 +133,48 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="Project Discovery Tool API")
+
+# SCRAPESCOUT_SWAGGER_BEARER_AUTH
+# Document the existing middleware-based JWT authentication in Swagger.
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+
+    openapi_schema.setdefault("components", {}).setdefault(
+        "securitySchemes", {}
+    )["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Enter your backend JWT access token.",
+    }
+
+    http_methods = {
+        "get", "post", "put", "patch", "delete",
+        "options", "head", "trace",
+    }
+
+    for path, path_item in openapi_schema.get("paths", {}).items():
+        for method, operation in path_item.items():
+            if method.lower() not in http_methods:
+                continue
+
+            if path in PUBLIC_PATHS:
+                operation["security"] = []
+            else:
+                operation["security"] = [{"BearerAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 # ============================================================
