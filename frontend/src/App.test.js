@@ -54,6 +54,13 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
+const settleAsyncAppUpdates = async () => {
+  await act(async () => {
+    // App initialization includes a debounced project refresh after auth succeeds.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
+};
+
 test('renders login screen by default when unauthenticated', () => {
   render(<App />);
 
@@ -173,24 +180,18 @@ test('authenticates successfully and renders dashboard with stats and projects',
     target: { value: 'Admin@123' },
   });
 
-  await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: /Access Workspace/i }));
-  });
+  fireEvent.click(screen.getByRole('button', { name: /Access Workspace/i }));
 
   await waitFor(() => {
     expect(screen.getByText(/System Administrator/i)).toBeInTheDocument();
   });
 
-  // Verify role badge
   expect(screen.getAllByText(/admin/i).length).toBeGreaterThanOrEqual(1);
-
-  // Verify dashboard stats
   expect(screen.getByText(/Total Projects/i)).toBeInTheDocument();
   expect(screen.getByText(/Web Projects/i)).toBeInTheDocument();
-
-  // Verify project card
   expect(screen.getAllByText('Full Stack React Application').length).toBeGreaterThanOrEqual(1);
   expect(screen.getAllByText(/Build a dashboard with React and FastAPI/i).length).toBeGreaterThanOrEqual(1);
+  await settleAsyncAppUpdates();
 });
 
 test('renders advanced search and filter controls and allows resetting', async () => {
@@ -226,7 +227,6 @@ test('renders advanced search and filter controls and allows resetting', async (
   fireEvent.change(searchInput, { target: { value: 'FastAPI' } });
   expect(searchInput.value).toBe('FastAPI');
 
-  // Verify filter controls exist
   expect(screen.getByLabelText(/Project Type/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/Category/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/Technology/i)).toBeInTheDocument();
@@ -234,11 +234,11 @@ test('renders advanced search and filter controls and allows resetting', async (
   expect(screen.getByLabelText(/Posted From/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/Posted To/i)).toBeInTheDocument();
 
-  // Click clear filters button
   const clearBtn = screen.getByRole('button', { name: /Clear Filters/i });
   fireEvent.click(clearBtn);
 
   expect(searchInput.value).toBe('');
+  await settleAsyncAppUpdates();
 });
 
 test('renders export controls for CSV and Excel', async () => {
@@ -259,9 +259,9 @@ test('renders export controls for CSV and Excel', async () => {
     return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
   });
 
-  // Mock URL object methods for download
   global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
   global.URL.revokeObjectURL = jest.fn();
+  jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
   render(<App />);
 
@@ -281,6 +281,7 @@ test('renders export controls for CSV and Excel', async () => {
   await waitFor(() => {
     expect(global.URL.createObjectURL).toHaveBeenCalled();
   });
+  await settleAsyncAppUpdates();
 });
 
 test('renders notifications panel and marks notification as read', async () => {
@@ -317,22 +318,19 @@ test('renders notifications panel and marks notification as read', async () => {
     expect(screen.getByRole('button', { name: /View notifications/i })).toBeInTheDocument();
   });
 
-  // Bell icon badge shows 1 unread notification
-  expect(screen.getByText('1')).toBeInTheDocument();
-
-  // Click bell to toggle panel
+  expect(await screen.findByText('1')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /View notifications/i }));
 
   expect(screen.getByText('New High Priority Lead')).toBeInTheDocument();
   expect(screen.getByText(/Discovered high-budget full-stack project/i)).toBeInTheDocument();
 
-  // Mark read
   const markReadBtn = screen.getByRole('button', { name: /Mark read/i });
   fireEvent.click(markReadBtn);
 
   await waitFor(() => {
     expect(screen.queryByRole('button', { name: /Mark read/i })).not.toBeInTheDocument();
   });
+  await settleAsyncAppUpdates();
 });
 
 test('handles sign out and returns to login screen', async () => {
@@ -363,6 +361,7 @@ test('handles sign out and returns to login screen', async () => {
   });
 
   expect(localStorage.getItem('scrapescout_token')).toBeNull();
+  await settleAsyncAppUpdates();
 });
 
 test('enforces role-based delete action between admin and viewer', async () => {
@@ -393,11 +392,11 @@ test('enforces role-based delete action between admin and viewer', async () => {
     expect(screen.getByText('Project Viewer')).toBeInTheDocument();
   });
 
-  // Viewer role must not have project delete button
   await waitFor(() => {
     expect(screen.getByText(/Viewer Access/i)).toBeInTheDocument();
   });
   expect(screen.queryByRole('button', { name: /Delete/i })).not.toBeInTheDocument();
+  await settleAsyncAppUpdates();
 });
 
 test('navigates across all sidebar sections and shows planned sources', async () => {
@@ -441,7 +440,6 @@ test('navigates across all sidebar sections and shows planned sources', async ()
 
   render(<App />);
 
-  // Sources page
   await waitFor(() => {
     expect(screen.getAllByRole('button', { name: /Sources/i }).length).toBeGreaterThanOrEqual(1);
   });
@@ -451,15 +449,14 @@ test('navigates across all sidebar sections and shows planned sources', async ()
   expect(screen.getByText('PeoplePerHour')).toBeInTheDocument();
   expect(screen.getAllByText(/Planned · Not Connected/i).length).toBe(4);
 
-  // Scraping Activity page
   fireEvent.click(screen.getByRole('button', { name: /Scraping Activity/i }));
   expect(await screen.findByText(/Scraping Run History/i)).toBeInTheDocument();
   expect(await screen.findByText('SUCCESS')).toBeInTheDocument();
 
-  // Settings page
   fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
   expect(await screen.findByText(/Appearance & Theme/i)).toBeInTheDocument();
   expect(screen.getAllByText(/System Administrator/i).length).toBeGreaterThanOrEqual(2);
+  await settleAsyncAppUpdates();
 });
 
 test('toggles light and dark theme and persists preference in localStorage', async () => {
@@ -475,19 +472,30 @@ test('toggles light and dark theme and persists preference in localStorage', asy
     return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
   });
 
-  const { container } = render(<App />);
+  render(<App />);
 
-  await waitFor(() => {
-    expect(container.querySelector('[data-theme="light"]')).toBeInTheDocument();
+  expect(await screen.findByText(mockUser.full_name)).toBeInTheDocument();
+  const themeToggle = await screen.findByRole('button', {
+    name: /Toggle color theme/i,
   });
 
-  const themeToggle = screen.getByRole('button', { name: /Toggle color theme/i });
+  expect(themeToggle).toHaveTextContent(/Dark/);
+  expect(localStorage.getItem('scrapescout_theme')).toBe('light');
+
   fireEvent.click(themeToggle);
 
   await waitFor(() => {
-    expect(container.querySelector('[data-theme="dark"]')).toBeInTheDocument();
+    expect(themeToggle).toHaveTextContent(/Light/);
   });
   expect(localStorage.getItem('scrapescout_theme')).toBe('dark');
+
+  fireEvent.click(themeToggle);
+
+  await waitFor(() => {
+    expect(themeToggle).toHaveTextContent(/Dark/);
+  });
+  expect(localStorage.getItem('scrapescout_theme')).toBe('light');
+  await settleAsyncAppUpdates();
 });
 
 test('triggers manual Truelancer fetch and displays loading and result summary', async () => {
@@ -550,9 +558,9 @@ test('triggers manual Truelancer fetch and displays loading and result summary',
   expect(screen.getByText('Records Found')).toBeInTheDocument();
   expect(screen.getByText('Projects Inserted')).toBeInTheDocument();
   expect(
-  within(screen.getByLabelText(/Manual fetch summary/i))
-    .getByText('Duplicates Skipped')
-).toBeInTheDocument();
+    within(screen.getByLabelText(/Manual fetch summary/i)).getByText('Duplicates Skipped'),
+  ).toBeInTheDocument();
+  await settleAsyncAppUpdates();
 });
 
 test('allows authenticated non-admin viewer to trigger manual Truelancer fetch', async () => {
@@ -580,6 +588,7 @@ test('allows authenticated non-admin viewer to trigger manual Truelancer fetch',
 
   const fetchBtn = await screen.findByRole('button', { name: /Fetch from Truelancer/i });
   expect(fetchBtn).toBeEnabled();
+  await settleAsyncAppUpdates();
 });
 
 test('renders Scheduler page, creates a schedule, and displays upcoming executions on Dashboard', async () => {
@@ -644,13 +653,12 @@ test('renders Scheduler page, creates a schedule, and displays upcoming executio
 
   render(<App />);
 
-  // Dashboard shows upcoming scheduled execution
   expect(await screen.findByText(/Upcoming Scheduled Executions/i)).toBeInTheDocument();
   expect(await screen.findByText('Daily Morning Sync')).toBeInTheDocument();
 
-  // Navigate to Scheduler page
   fireEvent.click(screen.getByRole('button', { name: /Scheduler/i }));
   expect(await screen.findByText(/Background Scheduler Status/i)).toBeInTheDocument();
   expect(screen.getByLabelText(/Frequency \*/i)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Save Schedule/i })).toBeInTheDocument();
+  await settleAsyncAppUpdates();
 });
