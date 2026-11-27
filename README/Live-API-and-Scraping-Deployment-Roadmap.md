@@ -1,333 +1,623 @@
-# ScrapeScout – Live API Server & Scraping Deployment Roadmap
+# ScrapeScout – Live API and Scraping Deployment Roadmap
 
-**Document Date:** 10 November 2026  
-**Project:** ScrapeScout – EDI Web & App Project Discovery Tool  
-**Scope:** Live Backend API, Truelancer Scraping, Database Connectivity and Frontend Integration  
-**Deployment Platform (Planned):** Render  
-**Database:** Supabase PostgreSQL
+## 1. Document Purpose
+
+This document defines the implementation and verification roadmap for connecting the live scraping system with the backend API, Supabase database, and frontend application.
+
+The objective is to move from locally tested scraping functionality to a verified workflow that can retrieve freelance project listings, process them, store them, and display them through the application.
+
+This document focuses on the live data-collection and deployment workflow rather than repeating the complete project development roadmap.
 
 ---
 
-## 1. Project Overview
+## 2. Current System Architecture
 
-ScrapeScout is a web-based project discovery system designed to collect genuine freelance opportunities related to website development, web applications, mobile applications and software development.
+The intended live workflow is:
 
-The purpose of this roadmap is to take the existing locally working ScrapeScout application and prepare it for live operation.
+**Truelancer → ScraperAPI → Scraping and Extraction Pipeline → Data Validation → Classification → Duplicate Detection → FastAPI → Supabase → Frontend Dashboard**
 
-The deployment workflow will connect the existing Python scraping system, FastAPI backend, Supabase database and React frontend.
+### 2.1 Components
 
-The focus is to make the complete application accessible through a publicly hosted API and enable reliable automated scraping.
+**Source Platform**
 
-## 2. Current Implementation Status
+Truelancer is the initial live source for collecting freelance project opportunities.
 
-The following components have already been implemented locally:
+**Fetching Provider**
 
-| Component | Current Status |
-|---|---|
-| Truelancer scraper implementation | Implemented |
-| Data extraction and parsing | Implemented |
-| Keyword-based classification | Implemented |
-| Project validation | Implemented |
-| Duplicate detection | Implemented |
-| Automated pipeline | Partially implemented |
-| APScheduler integration | Implemented, lifecycle integration pending |
-| FastAPI backend APIs | Implemented |
-| Supabase database integration | Implemented locally |
-| Dashboard frontend | Implemented |
-| Search and filtering | Implemented |
-| Daily opportunities | Implemented |
-| CSV export | Implemented |
-| Frontend-backend integration | Completed locally |
-| Live API hosting | Pending |
-| Live scraping execution | Pending |
-| Production scheduler | Pending |
+ScraperAPI is integrated as a configurable website-fetching provider.
 
-**Important:** Existing working functionality should be preserved. New implementation should focus on deployment readiness and live execution rather than unnecessarily rebuilding existing modules.
+**Scraping and Extraction**
 
-## 3. Technology Stack
+The scraper retrieves the source response, extracts project information, and follows pagination where supported.
 
-| Layer | Technology |
-|---|---|
-| Frontend | React.js |
-| Backend | Python, FastAPI |
-| Database | Supabase PostgreSQL |
-| Hosting | Render |
-| Scraping | Requests and BeautifulSoup / existing scraper implementation |
-| Classification | Existing Python keyword-based classifier |
-| Deduplication | Existing Python deduplication module |
-| Scheduling | APScheduler |
-| API communication | REST APIs |
-| Version control | Git and GitHub |
+**Data Processing**
 
-No additional AI classification API, including Groq, will be introduced. The existing keyword-based classification system will remain the single classification mechanism.
+The extracted records pass through cleaning, validation, classification, and duplicate detection.
 
-## 4. Deployment Roadmap
+**Backend API**
 
-### Phase 1 – Backend Production Preparation
+FastAPI receives valid processed records and provides endpoints for application operations.
 
-**Objective:** Prepare the existing FastAPI backend for deployment.
+**Database**
 
-Tasks:
-- Inspect the existing backend startup configuration.
-- Review and organize Python dependencies.
-- Confirm the production application entry point.
-- Configure environment-variable-based settings.
-- Ensure Supabase credentials are not hardcoded.
-- Review CORS configuration for the deployed frontend.
-- Prepare the appropriate production start command.
-- Ensure startup does not unintentionally trigger live scraping.
+Supabase PostgreSQL stores the collected project records and related scraping information.
 
-**Expected Deliverable:** Backend ready for hosting.
+**Frontend**
 
-**Completion Criteria:**
-- Backend starts using the production command.
-- Required dependencies are available.
-- Environment variables are configured securely.
-- Existing API functionality is preserved.
+The React dashboard displays project information retrieved through the backend APIs.
 
-### Phase 2 – FastAPI Hosting on Render
+---
 
-**Objective:** Host the backend on a publicly accessible server.
+## 3. Live Fetching Provider Configuration
 
-Tasks:
-- Create and configure a Render web service.
-- Connect the existing GitHub repository.
-- Configure the build command.
-- Configure the production start command.
-- Add required environment variables.
-- Deploy the backend.
-- Obtain the public API URL.
-- Confirm the API health endpoint responds successfully.
+**Status: Integrated; Live Production Verification Pending**
 
-**Expected Deliverable:** Publicly accessible FastAPI backend.
+### Objective
 
-**Completion Criteria:**
-- Deployment succeeds.
-- Public API URL is available.
-- API health endpoint responds.
-- Application logs are accessible.
+Use ScraperAPI as the configured fetching provider for website retrieval.
 
-### Phase 3 – Production Supabase Connectivity
+### Implementation
 
-**Objective:** Connect the hosted backend securely to Supabase.
+- ScraperAPI provider module is integrated.
+- Fetching logic is reusable across supported scraping workflows.
+- Provider selection is controlled through environment configuration.
+- The scraper and pipeline use the configured provider.
+- API credentials are stored in environment variables.
+- The API key must not be hardcoded or committed to the repository.
 
-Tasks:
-- Configure the Supabase project URL.
-- Configure the required server-side database credentials.
-- Store credentials in Render environment variables.
+### Configuration
+
+The environment configuration includes:
+
+`SCRAPING_PROVIDER=scraperapi`
+
+The actual ScraperAPI credential must remain in the local environment or the deployment platform's secret configuration.
+
+### Verification Activities
+
+- Verify that the provider configuration is loaded correctly.
+- Verify that the scraper selects ScraperAPI.
+- Verify that API credentials are available to the application without exposing them.
+- Verify successful responses through controlled requests.
+- Verify timeout and error handling.
+- Verify that unsuccessful responses do not produce invalid project records.
+
+### Expected Outcome
+
+A reusable and configurable fetching layer that can be used by the Truelancer scraping pipeline.
+
+---
+
+## 4. Truelancer Live Extraction
+
+**Status: Live API Extraction Tested; Full Production Workflow Pending**
+
+### Objective
+
+Retrieve project listing information from Truelancer and convert it into structured project records.
+
+### Implementation
+
+The scraper supports:
+
+- Truelancer HTML parsing.
+- Truelancer structured JSON parsing.
+- Extraction of project titles.
+- Extraction of descriptions.
+- Extraction of budgets and pricing information where available.
+- Extraction of technology information where available.
+- Extraction of project dates where available.
+- Extraction of project URLs.
+- Pagination support.
+- Handling of missing or inconsistent fields.
+
+### API Response Handling
+
+The extraction implementation supports structured Truelancer project responses containing project data and pagination information.
+
+The API response can provide a next-page URL, which the scraper validates before requesting the next page.
+
+### Important Extraction Rules
+
+- Only information actually present in the source response should be extracted.
+- Missing values must remain missing rather than being fabricated.
+- Project URLs must not be invented.
+- Application URLs must not automatically be treated as original project listing URLs.
+- Records without required original listing URLs must be excluded from submission to the backend.
+- Pagination must remain restricted to supported Truelancer hosts.
+
+### Expected Outcome
+
+A reliable extraction process that converts Truelancer responses into standardized project records.
+
+---
+
+## 5. Pagination and Multi-Page Extraction
+
+**Status: Implemented and Targeted Tests Passed**
+
+### Objective
+
+Retrieve projects across multiple listing pages instead of processing only the first page.
+
+### Implementation
+
+- Extract the next-page URL from the response.
+- Validate the next-page URL.
+- Confirm that the destination belongs to an allowed Truelancer host.
+- Request the next page through the configured fetching provider.
+- Parse the response using the appropriate HTML or JSON parser.
+- Continue until there are no further pages or the configured page limit is reached.
+- Handle failed page requests without corrupting previously extracted results.
+
+### Supported Truelancer Hosts
+
+- `truelancer.com`
+- `www.truelancer.com`
+- `api.truelancer.com`
+
+The API host is included because the structured project response can provide pagination URLs pointing to that host.
+
+### Verification
+
+The pagination implementation has been tested with both HTML-based and structured JSON response scenarios.
+
+The API host is accepted as a valid starting host after the corresponding validation update.
+
+### Expected Outcome
+
+A controlled multi-page extraction workflow with URL validation and error handling.
+
+---
+
+## 6. Data Processing Before API Submission
+
+**Status: Core Implementation Completed**
+
+### Objective
+
+Ensure that extracted records are processed before they are sent to the backend.
+
+### Processing Sequence
+
+1. Retrieve the source response.
+2. Parse the response.
+3. Extract project information.
+4. Clean extracted text.
+5. Normalize project fields.
+6. Validate required fields.
+7. Classify the project.
+8. Detect potential duplicates.
+9. Prepare the backend payload.
+10. Submit valid records through the API.
+
+### Validation Rules
+
+- Required fields must be present.
+- Optional fields may remain empty when unavailable.
+- Dates must be normalized where possible.
+- URLs must be valid.
+- Project types must follow the supported classification values.
+- Invalid records must not be submitted.
+- Records without original listing URLs must be skipped.
+
+### Classification
+
+The existing Python keyword-based classifier is used.
+
+A second AI classification service is not part of the current design.
+
+### Duplicate Detection
+
+The existing deduplication implementation checks project information against existing records and identifies potential duplicates before insertion.
+
+### Expected Outcome
+
+Only valid and appropriately processed project records proceed to API submission.
+
+---
+
+## 7. Backend API Integration
+
+**Status: Core Integration Implemented; Live End-to-End Verification Pending**
+
+### Objective
+
+Connect the scraping pipeline to the FastAPI backend.
+
+### Main API Operations
+
+The backend provides functionality for:
+
+- Retrieving projects.
+- Creating projects.
+- Deleting projects.
+- Retrieving and managing sources.
+- Creating scraping-run records.
+- Updating scraping-run status.
+
+### Scraping-Run Tracking
+
+The scraping workflow records execution information through the `scraping_runs` table.
+
+The relevant fields include:
+
+- `id`
+- `source_id`
+- `started_at`
+- `completed_at`
+- `status`
+- `records_found`
+- `error_log`
+
+Supported run states include:
+
+- `RUNNING`
+- `SUCCESS`
+- `FAILED`
+
+### Verification Activities
+
+- Verify backend connectivity.
+- Verify API request and response formats.
+- Verify authentication where required.
+- Verify Supabase connectivity.
+- Verify valid project insertion.
+- Verify that invalid records are rejected or skipped appropriately.
+- Verify scraping-run status updates.
+- Verify that failed scraping runs are recorded correctly.
+
+### Expected Outcome
+
+A functioning connection between the scraper, FastAPI, and Supabase.
+
+---
+
+## 8. Supabase Database Verification
+
+**Status: Database Integration Implemented; Complete Live Insertion Verification Pending**
+
+### Objective
+
+Verify that processed project records are stored correctly in Supabase.
+
+### Verification Activities
+
+- Confirm the Supabase project configuration.
 - Verify database connectivity.
-- Confirm existing table access.
-- Check project insertion and retrieval operations.
-- Confirm scraping-run records can be managed.
+- Verify required database tables.
+- Verify project field mapping.
+- Verify date and URL formats.
+- Verify classification fields.
+- Verify duplicate-related fields.
+- Verify source relationships.
+- Verify scraping-run records.
+- Verify that invalid or duplicate records are not inserted unnecessarily.
 
-**Expected Deliverable:** Hosted backend connected to Supabase.
+### Important Database Fields
 
-**Completion Criteria:**
-- Backend can access the database.
-- Existing records can be retrieved.
-- Authorized database operations work correctly.
-- Credentials are not exposed in frontend code or GitHub.
+The project mapping includes fields such as:
 
-### Phase 4 – Live Truelancer Scraping
+- Project title
+- Description
+- Budget
+- Pricing type
+- Posted date
+- Deadline
+- Required technologies
+- Project type
+- Source information
+- Original URL
+- Category
+- Confidence score
+- Duplicate status
+- Content hash
 
-**Objective:** Execute the existing scraper against the selected source under the applicable website access rules.
+The final stored values depend on the available source information and database schema.
 
-Tasks:
-- Review the existing Truelancer scraper configuration.
-- Confirm the source is enabled and configured correctly.
-- Execute a controlled live scraping run.
-- Extract available project information.
-- Clean and standardize extracted values.
-- Apply existing keyword-based classification.
-- Validate extracted records.
-- Run duplicate detection.
-- Submit eligible records through the existing backend pipeline.
-- Confirm successfully inserted records in Supabase.
+### Expected Outcome
 
-**Expected Deliverable:** Live Truelancer opportunities stored in Supabase.
+Reliable storage of standardized project information in Supabase.
 
-**Completion Criteria:**
-- Live scraping executes successfully.
-- Extracted records contain the available required fields.
-- Invalid records are handled appropriately.
-- Duplicate records are not inserted again.
-- Successful records are accessible through the backend APIs.
+---
 
-### Phase 5 – Automated Scraping Scheduler
+## 9. Frontend Integration
 
-**Objective:** Enable reliable automated execution of the scraping pipeline.
+**Status: Initial Integration Available; Full Live Data Verification Pending**
 
-Tasks:
-- Connect APScheduler to FastAPI startup and shutdown lifecycle.
-- Configure the scraping interval.
-- Prevent overlapping scraping jobs.
-- Handle unexpected job failures.
-- Implement suitable retry and recovery handling.
-- Record execution status and errors.
-- Ensure server restarts do not create duplicate scheduled jobs.
-- Confirm scheduler behavior in the hosted environment.
+### Objective
 
-**Expected Deliverable:** Automated scraping pipeline running on the hosted server.
+Display projects collected through the live scraping workflow in the React dashboard.
 
-**Completion Criteria:**
-- Scheduler starts and stops correctly.
-- Scraping executes at the configured interval.
-- Failed runs are recorded.
-- Overlapping executions are prevented.
-- Failures do not crash the entire backend.
+### Activities
 
-### Phase 6 – Frontend Connection to Live API
+- Verify frontend API configuration.
+- Verify communication with the backend.
+- Retrieve projects from the backend.
+- Display project details.
+- Display project source information.
+- Provide access to original project URLs.
+- Verify search functionality.
+- Verify filtering functionality.
+- Verify empty and error states.
+- Verify that newly collected projects appear in the dashboard.
 
-**Objective:** Connect the existing React application to the hosted FastAPI backend.
+### Expected Outcome
 
-Tasks:
-- Configure the production API base URL.
-- Use environment variables for frontend API configuration.
-- Rebuild the React application.
-- Verify dashboard analytics.
-- Verify search and filtering.
-- Verify daily opportunities.
-- Verify project creation and deletion where enabled.
-- Verify CSV export.
-- Verify error handling and loading states.
+A dashboard that displays the latest successfully stored project information.
 
-**Expected Deliverable:** React frontend communicating with the publicly hosted backend.
+---
 
-**Completion Criteria:**
-- Frontend loads successfully.
-- API requests use the deployed backend URL.
-- Existing dashboard functionality works.
-- Search and filters return backend data.
-- Daily opportunities load correctly.
-- CSV export works through the hosted API.
+## 10. Scheduler and Automated Scraping
 
-### Phase 7 – Complete Live Workflow Testing
+**Status: Implemented; Disabled by Default**
 
-**Objective:** Confirm that the entire application works as one integrated system.
+### Objective
 
-Complete workflow:
+Support automatic scraping at configured intervals.
 
-Truelancer → Scraper → Data Extraction → Classification → Validation → Deduplication → FastAPI → Supabase → React Frontend.
+### Implementation
 
-Tasks:
-- Execute an end-to-end live workflow.
-- Confirm extracted opportunities reach the database.
-- Confirm records appear on the dashboard.
-- Confirm search and filters work with live records.
-- Confirm daily opportunities display correctly.
-- Confirm CSV export contains the expected records.
-- Check scraping-run status and error handling.
-- Resolve any issues discovered during execution.
+- APScheduler integration is available.
+- Scheduler startup is connected to the FastAPI application lifecycle.
+- Scheduler configuration is controlled through environment variables.
+- Scheduled execution is disabled by default.
 
-**Expected Deliverable:** Fully connected live ScrapeScout application.
+### Configuration
 
-**Completion Criteria:**
-- End-to-end data flow works.
-- Database and frontend show consistent data.
-- No critical integration issues remain.
+The current default configuration is:
 
-## 5. Security and Reliability Considerations
+`SCHEDULER_ENABLED=false`
 
-The following requirements must be considered throughout implementation:
+### Verification Activities
 
-1. Never commit Supabase service-role keys or other secrets to GitHub.
-2. Keep backend credentials on the server.
-3. Configure CORS for the actual frontend origin in production.
-4. Respect Truelancer's applicable terms, access restrictions and robots directives.
-5. Avoid bypassing authentication, CAPTCHAs or other access controls.
-6. Handle HTTP errors, timeouts and temporary source downtime.
-7. Avoid inserting duplicate records.
-8. Prevent overlapping scheduled executions.
-9. Maintain useful application and scraping logs.
-10. Avoid exposing sensitive internal errors through public API responses.
+- Verify scheduler initialization.
+- Verify the configured execution interval.
+- Verify that scheduled execution invokes the intended scraping workflow.
+- Verify that each execution creates a scraping-run record.
+- Verify successful and failed execution logging.
+- Verify that repeated executions do not unnecessarily insert duplicate projects.
+- Verify the deployment environment can support the scheduler reliably.
 
-## 6. Work Division
+### Activation Condition
 
-### Our responsibility – Live API and Scraping
+Scheduled scraping should only be enabled after the complete live scraping-to-database workflow has been verified.
 
-- Backend production preparation.
-- Render API hosting.
-- Supabase production connectivity.
-- Live Truelancer scraping.
-- Production scraping pipeline.
-- Scheduler deployment.
-- Connecting frontend to the live API.
-- End-to-end live workflow.
+### Expected Outcome
 
-### Teammate responsibility – Phases 14–17
+A controlled automated scraping process that can operate reliably in the deployment environment.
 
-- Phase 14: Authentication and access control.
-- Phase 15: Notifications.
-- Phase 16: Quality assurance and testing.
-- Phase 17: Security and performance improvements.
+---
 
-These tasks must remain compatible with the existing implementation and the live API work.
+## 11. Testing and Validation
 
-### Joint responsibility – Final project completion
+**Status: Targeted Integration Testing Completed; Complete Production Validation Pending**
 
-- Phase 18: Final deployment.
-- Phase 19: Monitoring and maintenance.
+### Objective
 
-These final project-wide phases will be handled after the remaining implementation work is completed.
+Verify the fetching, extraction, processing, API integration, and database workflow.
 
-## 7. Risks and Limitations
+### Testing Areas
 
-| Risk | Planned Handling |
-|---|---|
-| Hosting service restarts | Configure reliable startup and scheduler lifecycle |
-| Database connection failure | Handle connection errors and log failures |
-| Truelancer access restrictions | Respect website policies and handle blocked requests |
-| Duplicate opportunities | Use existing deduplication logic |
-| Scraping failures | Record failed runs and implement recovery handling |
-| Missing project information | Preserve available fields and handle missing values |
-| API downtime | Monitor service health and application logs |
-| Frontend API connection errors | Configure the correct production API URL and CORS |
+**Fetching Tests**
 
-## 8. Progress Tracker
+- Provider configuration.
+- ScraperAPI request handling.
+- Successful responses.
+- Failed responses.
+- Timeout handling.
 
-The following tracker will be updated as implementation progresses.
+**Extraction Tests**
 
-| Phase | Task | Status |
-|---|---|---|
-| 1 | Backend production preparation | Not Started |
-| 2 | Render API hosting | Not Started |
-| 3 | Production Supabase connectivity | Not Started |
-| 4 | Live Truelancer scraping | Not Started |
-| 5 | Automated scheduler deployment | Not Started |
-| 6 | Frontend live API connection | Not Started |
-| 7 | Complete live workflow testing | Not Started |
+- HTML parsing.
+- JSON parsing.
+- Required-field extraction.
+- Missing-field handling.
+- URL extraction.
 
-## 9. Final Deployment Checklist
+**Pagination Tests**
 
-- [ ] Backend production configuration completed.
-- [ ] Render service deployed.
-- [ ] Public API URL obtained.
-- [ ] Supabase production connectivity confirmed.
-- [ ] Live Truelancer scraping completed.
-- [ ] Classification and deduplication working.
-- [ ] Valid records stored in Supabase.
-- [ ] APScheduler running correctly.
-- [ ] React frontend connected to live API.
-- [ ] Dashboard displays live data.
-- [ ] Search and filtering work.
-- [ ] Daily opportunities work.
-- [ ] CSV export works.
-- [ ] End-to-end workflow completed.
-- [ ] Remaining team implementation phases completed.
-- [ ] Final deployment and monitoring phases completed.
+- Next-page URL extraction.
+- Allowed-host validation.
+- API-host starting URL validation.
+- Multi-page extraction.
+- Pagination failure handling.
 
-## 10. Implementation Approach
+**Processing Tests**
 
-Implementation will follow a sequential approach.
+- Data cleaning.
+- Field validation.
+- Classification.
+- Duplicate detection.
+- Missing URL handling.
 
-- Complete one phase before moving to the next dependent phase.
-- Preserve existing working code wherever possible.
-- Make changes in the appropriate existing project files.
-- Use controlled testing before enabling live automated execution.
-- Update this document after completing each phase.
-- Record important configuration decisions and deployment details.
-- Keep all credentials and secrets outside version control.
+**Backend Tests**
 
-**Immediate Next Step:** Begin Phase 1 – Backend Production Preparation.
+- API connectivity.
+- Project submission.
+- Database mapping.
+- Scraping-run logging.
+- Error handling.
 
-**Final Goal:** Make ScrapeScout a publicly accessible, database-connected and automatically operating freelance opportunity discovery application.
+**Frontend Tests**
+
+- Project retrieval.
+- Project display.
+- Search.
+- Filtering.
+- Export.
+
+### Current Test Result
+
+The following targeted test files were executed together:
+
+- `tests/test_end_to_end_scraperapi_integration.py`
+- `tests/test_scraper.py`
+- `tests/test_pipeline.py`
+- `tests/test_pagination_and_logging.py`
+
+**Result: 70 tests passed in 1.08 seconds.**
+
+This result confirms that the selected test cases passed. It does not establish that the complete production workflow has already been verified.
+
+---
+
+## 12. Production Deployment Verification
+
+**Status: Pending Final Verification**
+
+### Objective
+
+Verify that all application components work together in the intended deployment environment.
+
+### Activities
+
+- Verify backend deployment.
+- Verify frontend deployment.
+- Verify production environment variables.
+- Verify ScraperAPI configuration in the deployment environment.
+- Verify Supabase connectivity.
+- Verify backend API accessibility.
+- Verify frontend-to-backend communication.
+- Execute a controlled live extraction.
+- Verify project processing.
+- Verify project insertion into Supabase.
+- Verify project retrieval through the backend API.
+- Verify project display in the frontend dashboard.
+- Verify scraping-run logging.
+- Verify error handling.
+- Verify scheduler configuration.
+
+### Expected Outcome
+
+A working deployed application that can retrieve, process, store, and display freelance project opportunities.
+
+---
+
+## 13. Final End-to-End Workflow
+
+The final verified workflow should follow this sequence:
+
+### Step 1 – Fetching
+
+The scraper sends a request through the configured ScraperAPI provider to retrieve Truelancer project listing information.
+
+### Step 2 – Extraction
+
+The scraper parses the response and extracts the available project details.
+
+### Step 3 – Pagination
+
+The scraper follows validated next-page URLs to retrieve additional project listings.
+
+### Step 4 – Cleaning and Validation
+
+The extraction layer cleans and validates the collected project information.
+
+### Step 5 – Classification
+
+The keyword-based classifier identifies the relevant project category and project type.
+
+### Step 6 – Duplicate Detection
+
+The deduplication module checks whether the project already exists or is likely to be a duplicate.
+
+### Step 7 – API Submission
+
+Valid, non-duplicate records are prepared and submitted to the FastAPI backend.
+
+### Step 8 – Database Storage
+
+The backend stores the project records in Supabase.
+
+### Step 9 – Dashboard Display
+
+The React frontend retrieves the stored project records through the backend API and displays them.
+
+### Step 10 – Monitoring
+
+The scraping-run tracking system records execution status and relevant errors.
+
+### Step 11 – Automation
+
+After successful production verification, scheduled scraping can be enabled.
+
+---
+
+## 14. Remaining Implementation Priorities
+
+The remaining work should be completed in the following order:
+
+### Priority 1 – Complete Live Scraping Verification
+
+Verify the complete configured ScraperAPI fetching and Truelancer extraction workflow.
+
+### Priority 2 – Verify API Submission
+
+Confirm that extracted and processed records can be submitted successfully to FastAPI.
+
+### Priority 3 – Verify Supabase Storage
+
+Confirm that valid project records are inserted and mapped correctly.
+
+### Priority 4 – Verify Frontend Integration
+
+Confirm that newly collected records are displayed correctly in the dashboard.
+
+### Priority 5 – Complete Full-System Testing
+
+Run the complete relevant backend and frontend test suites and resolve any outstanding failures.
+
+### Priority 6 – Verify Production Configuration
+
+Check deployment environment variables, API accessibility, database connectivity, and error logging.
+
+### Priority 7 – Verify Scheduled Execution
+
+Test scheduler behavior in the deployment environment before enabling automatic execution.
+
+---
+
+## 15. Completion Criteria
+
+The live scraping and deployment workflow will be considered complete when:
+
+- ScraperAPI is configured correctly in the target environment.
+- Truelancer project listings can be retrieved successfully.
+- Multiple listing pages can be processed.
+- Extracted records are correctly cleaned and validated.
+- Classification works as expected.
+- Duplicate detection works as expected.
+- Invalid records are not submitted.
+- Valid records are successfully submitted to FastAPI.
+- Supabase stores the records correctly.
+- Scraping-run information is recorded.
+- The frontend displays newly collected projects.
+- Search and filtering work with the collected data.
+- Export functionality works correctly.
+- Production configuration is verified.
+- The complete workflow passes end-to-end testing.
+- Scheduled scraping is tested before being enabled.
+
+---
+
+## 16. Final Expected Result
+
+The final objective is to establish a working live data pipeline in which ScrapeScout automatically retrieves freelance project opportunities from the configured freelancing source, processes and classifies the extracted information, prevents unnecessary duplicate entries, stores valid records in Supabase, and makes those records accessible through the FastAPI backend and React dashboard.
+
+The initial release will focus on a stable Truelancer integration. Additional freelancing platforms can be integrated later using the same reusable fetching, extraction, validation, classification, and storage architecture.
+
+---
+
+## 17. Manual Fetch, Recurring Scheduler & Frontend Integration Update
+
+- **Manual Fetch Endpoint:** `POST /scrape/truelancer/manual` (authenticated via `require_authenticated`) invokes `run_truelancer_pipeline()` for the active `Truelancer` source using `SCRAPING_PROVIDER` (`scraperapi` / `direct`), `SCHEDULER_MAX_PAGES`, and `SCHEDULER_MIN_REQUEST_INTERVAL`.
+- **Persistent Recurring Scheduler:** `GET/POST /schedules`, `PATCH/DELETE /schedules/{id}`, `POST /schedules/{id}/pause|resume`, and `GET /schedules/status` manage persistent daily, weekly, monthly, and custom schedules in `public.scraping_schedules` (`migrations/05_scraping_schedules.sql`) with `Asia/Kolkata` default timezone, APScheduler overlap protection, and real calculated `next_run_at` timestamps.
+- **Source Mapping & Analytics:** `GET /analytics/dashboard` filters `sources` by `is_active = True` and reports `inserted_today`, `duplicates_skipped`, `active_sources_count`, and `upcoming_schedules`. Safe SQL cleanup & backfill for legacy `NULL` `source_id` Truelancer projects is prepared in `migrations/04_source_cleanup_and_backfill.sql` for manual review and execution.
+- **Frontend Workflow:** The multi-page React UI (`Dashboard`, `Projects`, `Sources`, `Scheduler`, `Scraping Activity`, `Exports`, `Settings`) provides a **Fetch from Truelancer** button for all authenticated users, a full **Scheduler** management UI, and persistent Light/Dark mode.
+- **Live Verification Note:** Automated backend (`pytest`) and frontend (`jest`) suites use mocked requests and do not constitute a live Truelancer scraping run or live scheduled run against Truelancer. Live verification remains pending explicit execution against the target environment.
+
+- **Manual Fetch Endpoint:** `POST /scrape/truelancer/manual` (admin-protected via `require_admin`) invokes `run_truelancer_pipeline()` for the active `Truelancer` source using `SCRAPING_PROVIDER` (`scraperapi` / `direct`), `SCRAPER_API_KEY`, `SCHEDULER_MAX_PAGES`, and `SCHEDULER_MIN_REQUEST_INTERVAL`.
+- **Source Mapping & Analytics:** `GET /analytics/dashboard` now filters `sources` by `is_active = True`. Safe SQL cleanup & backfill for legacy `NULL` `source_id` Truelancer projects is prepared in `migrations/04_source_cleanup_and_backfill.sql` for manual review and execution.
+- **Frontend Workflow:** The redesigned multi-page React UI (`Dashboard`, `Projects`, `Sources`, `Scraping Activity`, `Exports`, `Settings`) provides a **Fetch from Truelancer** button with loading feedback, result breakdown, automatic data refresh, and persistent Light/Dark mode.
+- **Live Verification Note:** Automated backend (`pytest`) and frontend (`jest`) suites use mocked requests and do not constitute a live Truelancer scraping run. Live scraping verification remains pending explicit execution against the target environment.

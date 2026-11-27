@@ -1,4 +1,4 @@
-
+﻿
 import os
 import csv
 import io
@@ -7,13 +7,14 @@ import logging
 from datetime import datetime, timezone, timedelta, date, time
 from typing import List, Optional
 from uuid import UUID
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.openapi.utils import get_openapi
-from supabase import create_client, Client
+from backend.supabase_client import create_client, Client
 
 
 logger = logging.getLogger("scrapescout.api")
@@ -32,6 +33,11 @@ try:
         ScrapingRunCreate,
         ScrapingRunUpdate,
         ScrapingRunResponse,
+        ManualTruelancerFetchRequest,
+        ManualTruelancerFetchResponse,
+        ScheduleCreate,
+        ScheduleUpdate,
+        ScheduleResponse,
         UserLogin,
         UserRegister,
         UserResponse,
@@ -81,6 +87,11 @@ except ImportError:
         ScrapingRunCreate,
         ScrapingRunUpdate,
         ScrapingRunResponse,
+        ManualTruelancerFetchRequest,
+        ManualTruelancerFetchResponse,
+        ScheduleCreate,
+        ScheduleUpdate,
+        ScheduleResponse,
         UserLogin,
         UserRegister,
         UserResponse,
@@ -122,6 +133,61 @@ try:
     from backend.route_security import ProductionAuthMiddleware, PUBLIC_PATHS
 except ImportError:
     from route_security import ProductionAuthMiddleware, PUBLIC_PATHS
+
+import sys
+from pathlib import Path
+
+# Ensure backend directory is in sys.path so 'src' can always be resolved
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+try:
+    from src.scheduler import (
+        start_scheduler_from_config,
+        stop_scheduler,
+        get_scheduler,
+        build_trigger_for_schedule,
+        calculate_next_run_time,
+        is_scheduler_enabled_in_env,
+        sync_schedules_to_scheduler,
+    )
+    from src.pipeline import run_truelancer_pipeline
+    from src.deduplicator import ProjectDeduplicator
+    from src.supabase_mapper import map_project_to_supabase
+    from src.scraper import ScrapingAccessError
+    from src.scraperapi_provider import (
+        ScraperAPIAccessError,
+        ScraperAPIConfigError,
+        ScraperAPIError,
+        redact_api_key,
+    )
+except ImportError:
+    try:
+        from backend.src.scheduler import start_scheduler_from_config, stop_scheduler
+        from backend.src.pipeline import run_truelancer_pipeline
+        from backend.src.deduplicator import ProjectDeduplicator
+        from backend.src.supabase_mapper import map_project_to_supabase
+        from backend.src.scraper import ScrapingAccessError
+        from backend.src.scraperapi_provider import (
+            ScraperAPIAccessError,
+            ScraperAPIConfigError,
+            ScraperAPIError,
+            redact_api_key,
+        )
+    except ImportError:
+        from scheduler import start_scheduler_from_config, stop_scheduler
+        from pipeline import run_truelancer_pipeline
+        from deduplicator import ProjectDeduplicator
+        from supabase_mapper import map_project_to_supabase
+        from scraper import ScrapingAccessError
+        from scraperapi_provider import (
+            ScraperAPIAccessError,
+            ScraperAPIConfigError,
+            ScraperAPIError,
+            redact_api_key,
+        )
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -132,7 +198,28 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-app = FastAPI(title="Project Discovery Tool API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize scheduler; propagate any exception so FastAPI startup fails when configuration is invalid
+    start_scheduler_from_config()
+
+    if is_scheduler_enabled_in_env():
+        try:
+            _sync_persisted_schedules()
+        except Exception as exc:
+            logger.warning("Could not load persisted schedules on startup: %s", exc)
+
+    yield
+
+    # Shutdown: Stop the scheduler safely without blocking web server termination
+    try:
+        stop_scheduler(wait=False)
+    except Exception as exc:
+        logger.error("Error stopping automated scraping scheduler: %s", exc)
+
+
+app = FastAPI(title="Project Discovery Tool API", lifespan=lifespan)
 
 # SCRAPESCOUT_SWAGGER_BEARER_AUTH
 # Document the existing middleware-based JWT authentication in Swagger.
@@ -850,6 +937,7 @@ def create_project(project: ProjectCreate):
                 message=f"Opportunity '{project.title}' was added to ScrapeScout.",
                 notif_type="info",
                 link=project.original_url,
+                client=supabase,
             )
         except Exception:
             pass
@@ -1328,7 +1416,35 @@ def get_dashboard_analytics():
 
         projects_today = today_response.count or 0
 
-        project_types = ["Web", "App", "Software", "Both"]
+        today_duplicates_count = 0
+        try:
+            today_dup_response = (
+                supabase.table("projects")
+                .select("id", count="exact")
+                .eq("is_duplicate", True)
+                .gte("created_at", today_start_utc.isoformat())
+                .lt("created_at", tomorrow_start_utc.isoformat())
+                .execute()
+            )
+            today_duplicates_count = today_dup_response.count or 0
+        except Exception:
+            today_duplicates_count = 0
+
+        inserted_today = max(0, projects_today - today_duplicates_count)
+
+        duplicates_skipped = 0
+        try:
+            dup_response = (
+                supabase.table("projects")
+                .select("id", count="exact")
+                .eq("is_duplicate", True)
+                .execute()
+            )
+            duplicates_skipped = dup_response.count or 0
+        except Exception:
+            duplicates_skipped = 0
+
+        project_types = ["Web", "Mobile", "Both", "Unspecified"]
         projects_by_type = {}
 
         for project_type in project_types:
@@ -1343,13 +1459,17 @@ def get_dashboard_analytics():
 
         sources_response = (
             supabase.table("sources")
-            .select("id,name")
+            .select("id,name,is_active")
+            .eq("is_active", True)
             .execute()
         )
 
         projects_by_source = []
 
         for source in sources_response.data or []:
+            if source.get("is_active") is False:
+                continue
+
             source_id = source.get("id")
             source_name = source.get("name", "Unknown")
 
@@ -1398,12 +1518,48 @@ def get_dashboard_analytics():
 
             scraping_runs[result_key] = run_response.count or 0
 
+        upcoming_schedules = []
+        try:
+            sched_response = (
+                supabase.table("scraping_schedules")
+                .select("*")
+                .eq("is_enabled", True)
+                .execute()
+            )
+            for sched in sched_response.data or []:
+                if not isinstance(sched, dict) or not sched.get("is_enabled", True):
+                    continue
+                try:
+                    next_dt = calculate_next_run_time(sched)
+                except Exception:
+                    next_dt = None
+                upcoming_schedules.append({
+                    "id": str(sched.get("id")),
+                    "name": sched.get("name"),
+                    "source_id": str(sched.get("source_id")),
+                    "frequency": sched.get("frequency"),
+                    "timezone": sched.get("timezone") or "Asia/Kolkata",
+                    "next_run_at": next_dt.isoformat() if next_dt else sched.get("next_run_at"),
+                    "last_run_at": sched.get("last_run_at"),
+                    "last_run_status": sched.get("last_run_status"),
+                })
+            upcoming_schedules.sort(
+                key=lambda item: item.get("next_run_at") or "9999"
+            )
+        except Exception:
+            upcoming_schedules = []
+
         return {
             "total_projects": total_projects,
             "projects_today": projects_today,
+            "inserted_today": inserted_today,
+            "duplicates_skipped": duplicates_skipped,
+            "active_sources_count": len(projects_by_source),
             "projects_by_type": projects_by_type,
             "projects_by_source": projects_by_source,
             "scraping_runs": scraping_runs,
+            "scheduler_enabled": is_scheduler_enabled_in_env(),
+            "upcoming_schedules": upcoming_schedules,
         }
 
     except Exception:
@@ -1642,6 +1798,7 @@ def update_scraping_run_endpoint(
                 title=f"Scraping Run {status_val.capitalize()}",
                 message=f"Scraping job completed with status {status_val}. {update_data.get('records_found', 0)} records found.",
                 notif_type="success" if status_val == "SUCCESS" else "warning",
+                client=supabase,
             )
         except Exception:
             pass
@@ -1731,6 +1888,707 @@ def create_system_notification(
         link=notification.link,
         client=supabase,
     )
+
+
+# ============================================================
+# MANUAL SCRAPING ENDPOINTS
+# ============================================================
+
+def _resolve_truelancer_start_url(source: dict) -> str:
+    """Resolve the Truelancer listing URL from source config or environment."""
+    rules = source.get("scraping_rules")
+    if isinstance(rules, dict):
+        rule_url = rules.get("start_url")
+        if isinstance(rule_url, str) and rule_url.strip():
+            return rule_url.strip()
+
+    base_url = (source.get("base_url") or "").strip().rstrip("/")
+    if base_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        if parsed.path and parsed.path != "/":
+            return base_url
+
+    env_url = os.getenv("SCHEDULER_START_URL", "").strip()
+    if env_url:
+        return env_url
+
+    if base_url:
+        return f"{base_url}/freelance-jobs"
+
+    return "https://www.truelancer.com/freelance-jobs"
+
+
+def _backend_create_scraping_run(source_id: str, api_endpoint: str = "") -> str:
+    """Create a RUNNING scraping run record directly in Supabase."""
+    response = (
+        supabase.table("scraping_runs")
+        .insert({"source_id": source_id, "status": "RUNNING"})
+        .execute()
+    )
+    if not response.data or not response.data[0].get("id"):
+        raise RuntimeError("Failed to create scraping_runs record.")
+    return str(response.data[0]["id"])
+
+
+def _backend_update_scraping_run(
+    run_id: str,
+    status: str,
+    records_found: int,
+    error_log: Optional[str] = None,
+    api_endpoint: str = "",
+) -> None:
+    """Update a scraping run record directly in Supabase and emit notification."""
+    update_payload = {
+        "status": status,
+        "records_found": records_found,
+        "error_log": error_log,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (
+        supabase.table("scraping_runs")
+        .update(update_payload)
+        .eq("id", str(run_id))
+        .execute()
+    )
+    try:
+        safe_notify(
+            title=f"Scraping Run {status.capitalize()}",
+            message=f"Truelancer manual fetch completed with status {status}. {records_found} records found.",
+            notif_type="success" if status == "SUCCESS" else "warning",
+            client=supabase,
+        )
+    except Exception:
+        pass
+
+
+def _backend_submit_projects(projects: list, source_id: str) -> dict:
+    """Validate, deduplicate, insert projects, and retain failure diagnostics."""
+    results = {
+        "total": len(projects),
+        "inserted": 0,
+        "duplicate_skipped": 0,
+        "irrelevant_skipped": 0,
+        "missing_url_skipped": 0,
+        "source_not_found_skipped": 0,
+        "invalid_skipped": 0,
+        "failed": 0,
+        "failure_details": [],
+    }
+
+    def record_failure(project, reason: str) -> None:
+        if len(results["failure_details"]) >= 10:
+            return
+
+        title = str(getattr(project, "title", None) or "Untitled project")
+        results["failure_details"].append({
+            "title": title[:160],
+            "error": str(reason)[:500],
+        })
+
+    if not projects:
+        return results
+
+    existing_response = (
+        supabase.table("projects")
+        .select("id,title,description,original_url")
+        .execute()
+    )
+    existing_projects = list(existing_response.data or [])
+    deduplicator = ProjectDeduplicator()
+
+    for project in projects:
+        if not getattr(project, "is_relevant", False):
+            results["irrelevant_skipped"] += 1
+            continue
+
+        original_url = getattr(project, "original_url", None)
+        if (
+            not isinstance(original_url, str)
+            or not original_url.strip()
+            or original_url.strip() == "Not specified"
+        ):
+            results["missing_url_skipped"] += 1
+            continue
+
+        try:
+            payload = map_project_to_supabase(project, source_id)
+        except ValueError as exc:
+            results["invalid_skipped"] += 1
+            logger.warning(
+                "Invalid project mapping for '%s': %s",
+                getattr(project, "title", ""),
+                exc,
+            )
+            continue
+
+        is_duplicate, _ = deduplicator.is_duplicate(
+            payload,
+            existing_projects,
+        )
+        if is_duplicate:
+            results["duplicate_skipped"] += 1
+            continue
+
+        try:
+            insert_response = (
+                supabase.table("projects")
+                .insert(payload)
+                .execute()
+            )
+
+            if insert_response.data:
+                existing_projects.append(payload)
+                results["inserted"] += 1
+            else:
+                results["failed"] += 1
+                record_failure(
+                    project,
+                    "Supabase insert returned no inserted record.",
+                )
+
+        except Exception as exc:
+            error_msg = str(exc)
+
+            if (
+                "duplicate key value violates unique constraint" in error_msg
+                or "23505" in error_msg
+            ):
+                results["duplicate_skipped"] += 1
+            else:
+                logger.warning(
+                    "Failed to insert project '%s': %s",
+                    getattr(project, "title", ""),
+                    exc,
+                )
+                results["failed"] += 1
+                record_failure(
+                    project,
+                    f"{type(exc).__name__}: {error_msg}",
+                )
+
+    return results
+
+@app.post(
+    "/scrape/truelancer/manual",
+    response_model=ManualTruelancerFetchResponse,
+)
+def trigger_manual_truelancer_fetch(
+    request_body: Optional[ManualTruelancerFetchRequest] = None,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """
+    Trigger a manual Truelancer scraping run using the existing pipeline and provider config.
+    Accessible to any authenticated user.
+    """
+    try:
+        sources_response = supabase.table("sources").select("*").execute()
+    except Exception:
+        logger.exception("Failed to query sources for manual Truelancer fetch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to load source configuration from the database.",
+        )
+
+    truelancer_sources = [
+        s for s in (sources_response.data or [])
+        if isinstance(s, dict) and (s.get("name") or "").strip().casefold() == "truelancer"
+    ]
+
+    if not truelancer_sources:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Truelancer source is not configured in the database.",
+        )
+
+    active_source = next(
+        (s for s in truelancer_sources if s.get("is_active") is not False),
+        None,
+    )
+    if active_source is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Truelancer source is currently inactive. Activate it before fetching.",
+        )
+
+    source_id = str(active_source["id"])
+    source_name = active_source.get("name") or "Truelancer"
+    start_url = _resolve_truelancer_start_url(active_source)
+
+    max_pages = (
+        request_body.max_pages
+        if request_body and request_body.max_pages is not None
+        else int(os.getenv("SCHEDULER_MAX_PAGES", "3"))
+    )
+    min_request_interval = (
+        request_body.min_request_interval
+        if request_body and request_body.min_request_interval is not None
+        else float(os.getenv("SCHEDULER_MIN_REQUEST_INTERVAL", "1.0"))
+    )
+    resolved_provider = (
+        request_body.provider
+        if request_body and request_body.provider is not None
+        else os.getenv("SCRAPING_PROVIDER", "direct").strip().lower()
+    )
+
+    try:
+        pipeline_result = run_truelancer_pipeline(
+            source_id=source_id,
+            start_url=start_url,
+            max_pages=max_pages,
+            min_request_interval=min_request_interval,
+            provider=resolved_provider,
+            run_creator=_backend_create_scraping_run,
+            run_updater=_backend_update_scraping_run,
+            submitter=lambda projs: _backend_submit_projects(projs, source_id),
+        )
+    except ScraperAPIConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=redact_api_key(str(exc)),
+        )
+    except (ScraperAPIAccessError, ScrapingAccessError, ScraperAPIError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=redact_api_key(str(exc)),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=redact_api_key(str(exc)),
+        )
+    except Exception as exc:
+        logger.exception("Manual Truelancer fetch failed unexpectedly")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=redact_api_key(
+                f"Manual Truelancer fetch failed: {type(exc).__name__}"
+            ),
+        )
+
+    submission = pipeline_result.get("submission") or {}
+    return ManualTruelancerFetchResponse(
+        run_id=str(pipeline_result["run_id"]),
+        source_id=source_id,
+        source_name=source_name,
+        provider=resolved_provider,
+        start_url=start_url,
+        status=str(pipeline_result["status"]),
+        records_found=int(pipeline_result.get("records_found", 0)),
+        inserted=int(submission.get("inserted", 0)),
+        duplicate_skipped=int(submission.get("duplicate_skipped", 0)),
+        irrelevant_skipped=int(submission.get("irrelevant_skipped", 0)),
+        missing_url_skipped=int(submission.get("missing_url_skipped", 0)),
+        invalid_skipped=int(submission.get("invalid_skipped", 0)),
+        failed=int(submission.get("failed", 0)),
+        submission=submission,
+    )
+
+
+# ============================================================
+# RECURRING SCHEDULER ENDPOINTS
+# ============================================================
+
+def _is_missing_schedules_table_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "scraping_schedules" in msg and (
+        "does not exist" in msg
+        or "could not find the table" in msg
+        or "pgrst205" in msg
+        or "42p01" in msg
+    )
+
+
+def _execute_persisted_schedule(schedule_id: str):
+    """Execute one persisted recurring schedule against the Truelancer pipeline."""
+    now_utc = datetime.now(timezone.utc)
+    try:
+        sched_resp = (
+            supabase.table("scraping_schedules")
+            .select("*")
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        if not sched_resp.data:
+            logger.warning("Scheduled job %s skipped: schedule not found.", schedule_id)
+            return None
+        schedule = sched_resp.data[0]
+        if not schedule.get("is_enabled", True):
+            logger.info("Scheduled job %s skipped: schedule is paused.", schedule_id)
+            return None
+
+        source_id = str(schedule["source_id"])
+        src_resp = (
+            supabase.table("sources")
+            .select("*")
+            .eq("id", source_id)
+            .execute()
+        )
+        if not src_resp.data:
+            raise ValueError("Configured source was not found.")
+        source = src_resp.data[0]
+        if source.get("is_active") is False:
+            raise ValueError("Configured source is inactive.")
+
+        (
+            supabase.table("scraping_schedules")
+            .update({
+                "last_run_at": now_utc.isoformat(),
+                "last_run_status": "RUNNING",
+                "last_error": None,
+                "updated_at": now_utc.isoformat(),
+            })
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+
+        start_url = _resolve_truelancer_start_url(source)
+        provider = os.getenv("SCRAPING_PROVIDER", "direct").strip().lower()
+        result = run_truelancer_pipeline(
+            source_id=source_id,
+            start_url=start_url,
+            max_pages=int(schedule.get("max_pages") or 3),
+            min_request_interval=float(schedule.get("min_request_interval") or 1.0),
+            provider=provider,
+            run_creator=_backend_create_scraping_run,
+            run_updater=_backend_update_scraping_run,
+            submitter=lambda projs: _backend_submit_projects(projs, source_id),
+        )
+
+        next_dt = calculate_next_run_time(schedule)
+        final_status = str(result.get("status") or "SUCCESS")
+        (
+            supabase.table("scraping_schedules")
+            .update({
+                "last_run_status": final_status,
+                "last_error": None if final_status == "SUCCESS" else "One or more submissions failed.",
+                "next_run_at": next_dt.isoformat() if next_dt else None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        return result
+    except Exception as exc:
+        logger.exception("Persisted schedule %s execution failed", schedule_id)
+        try:
+            next_dt = None
+            sched_resp = (
+                supabase.table("scraping_schedules")
+                .select("*")
+                .eq("id", str(schedule_id))
+                .execute()
+            )
+            if sched_resp.data:
+                next_dt = calculate_next_run_time(sched_resp.data[0])
+            (
+                supabase.table("scraping_schedules")
+                .update({
+                    "last_run_at": now_utc.isoformat(),
+                    "last_run_status": "FAILED",
+                    "last_error": redact_api_key(str(exc))[:1000],
+                    "next_run_at": next_dt.isoformat() if next_dt else None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+                .eq("id", str(schedule_id))
+                .execute()
+            )
+        except Exception:
+            logger.exception("Failed to record error status for schedule %s", schedule_id)
+        return None
+
+
+def _sync_persisted_schedules():
+    """Load persisted schedules from Supabase and sync with APScheduler."""
+    response = supabase.table("scraping_schedules").select("*").execute()
+    schedules = response.data or []
+    return sync_schedules_to_scheduler(schedules, _execute_persisted_schedule)
+
+
+def _enrich_schedule_row(row: dict) -> dict:
+    """Ensure next_run_at reflects the real calculated next execution time."""
+    enriched = dict(row)
+    if enriched.get("is_enabled", True):
+        try:
+            next_dt = calculate_next_run_time(enriched)
+            enriched["next_run_at"] = next_dt.isoformat() if next_dt else None
+        except Exception:
+            pass
+    else:
+        enriched["next_run_at"] = None
+    return enriched
+
+
+@app.get("/schedules/status")
+def get_scheduler_status(current_user: CurrentUser = Depends(require_authenticated)):
+    """Return whether background scheduled execution is enabled and running."""
+    sched = get_scheduler()
+    return {
+        "scheduler_enabled": is_scheduler_enabled_in_env(),
+        "running": bool(sched is not None and sched.running),
+        "default_timezone": "Asia/Kolkata",
+    }
+
+
+@app.get(
+    "/schedules",
+    response_model=List[ScheduleResponse],
+)
+def list_schedules(current_user: CurrentUser = Depends(require_authenticated)):
+    """List all saved recurring scraping schedules."""
+    try:
+        response = (
+            supabase.table("scraping_schedules")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return [_enrich_schedule_row(row) for row in (response.data or [])]
+    except Exception as exc:
+        if _is_missing_schedules_table_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Schedules table is not initialized. Apply migrations/05_scraping_schedules.sql.",
+            )
+        logger.exception("Failed to list schedules")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to fetch schedules due to a server error.",
+        )
+
+
+@app.post(
+    "/schedules",
+    response_model=ScheduleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_schedule(
+    payload: ScheduleCreate,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """Create a persistent recurring scraping schedule for an active source."""
+    try:
+        src_resp = (
+            supabase.table("sources")
+            .select("*")
+            .eq("id", str(payload.source_id))
+            .execute()
+        )
+        if not src_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Selected source was not found.",
+            )
+        if src_resp.data[0].get("is_active") is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot create a schedule for an inactive source.",
+            )
+
+        schedule_data = payload.model_dump(mode="json")
+        try:
+            build_trigger_for_schedule(schedule_data)
+            next_dt = calculate_next_run_time(schedule_data)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            )
+
+        schedule_data["next_run_at"] = next_dt.isoformat() if next_dt else None
+        schedule_data["created_by"] = current_user.id
+
+        insert_resp = (
+            supabase.table("scraping_schedules")
+            .insert(schedule_data)
+            .execute()
+        )
+        if not insert_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Schedule creation returned no data.",
+            )
+
+        try:
+            _sync_persisted_schedules()
+        except Exception as sync_exc:
+            logger.warning("Schedule saved but APScheduler sync skipped: %s", sync_exc)
+
+        return _enrich_schedule_row(insert_resp.data[0])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if _is_missing_schedules_table_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Schedules table is not initialized. Apply migrations/05_scraping_schedules.sql.",
+            )
+        logger.exception("Failed to create schedule")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to create schedule due to a server error.",
+        )
+
+
+@app.patch(
+    "/schedules/{schedule_id}",
+    response_model=ScheduleResponse,
+)
+def update_schedule(
+    schedule_id: UUID,
+    payload: ScheduleUpdate,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """Update an existing recurring scraping schedule."""
+    update_data = payload.model_dump(mode="json", exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one schedule field must be provided.",
+        )
+
+    try:
+        existing_resp = (
+            supabase.table("scraping_schedules")
+            .select("*")
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        if not existing_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Schedule was not found.",
+            )
+
+        merged = {**existing_resp.data[0], **update_data}
+        if "source_id" in update_data:
+            src_resp = (
+                supabase.table("sources")
+                .select("*")
+                .eq("id", str(update_data["source_id"]))
+                .execute()
+            )
+            if not src_resp.data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Selected source was not found.",
+                )
+            if src_resp.data[0].get("is_active") is False:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot assign schedule to an inactive source.",
+                )
+
+        try:
+            build_trigger_for_schedule(merged)
+            next_dt = calculate_next_run_time(merged)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            )
+
+        update_data["next_run_at"] = next_dt.isoformat() if next_dt else None
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        update_resp = (
+            supabase.table("scraping_schedules")
+            .update(update_data)
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        if not update_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Schedule was not found.",
+            )
+
+        try:
+            _sync_persisted_schedules()
+        except Exception as sync_exc:
+            logger.warning("Schedule updated but APScheduler sync skipped: %s", sync_exc)
+
+        return _enrich_schedule_row(update_resp.data[0])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if _is_missing_schedules_table_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Schedules table is not initialized. Apply migrations/05_scraping_schedules.sql.",
+            )
+        logger.exception("Failed to update schedule")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update schedule due to a server error.",
+        )
+
+
+@app.post(
+    "/schedules/{schedule_id}/pause",
+    response_model=ScheduleResponse,
+)
+def pause_schedule(
+    schedule_id: UUID,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """Pause a recurring schedule."""
+    return update_schedule(
+        schedule_id=schedule_id,
+        payload=ScheduleUpdate(is_enabled=False),
+        current_user=current_user,
+    )
+
+
+@app.post(
+    "/schedules/{schedule_id}/resume",
+    response_model=ScheduleResponse,
+)
+def resume_schedule(
+    schedule_id: UUID,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """Resume a paused recurring schedule."""
+    return update_schedule(
+        schedule_id=schedule_id,
+        payload=ScheduleUpdate(is_enabled=True),
+        current_user=current_user,
+    )
+
+
+@app.delete(
+    "/schedules/{schedule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_schedule(
+    schedule_id: UUID,
+    current_user: CurrentUser = Depends(require_authenticated),
+):
+    """Delete a recurring schedule."""
+    try:
+        (
+            supabase.table("scraping_schedules")
+            .delete()
+            .eq("id", str(schedule_id))
+            .execute()
+        )
+        try:
+            _sync_persisted_schedules()
+        except Exception as sync_exc:
+            logger.warning("Schedule deleted but APScheduler sync skipped: %s", sync_exc)
+        return None
+    except Exception as exc:
+        if _is_missing_schedules_table_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Schedules table is not initialized. Apply migrations/05_scraping_schedules.sql.",
+            )
+        logger.exception("Failed to delete schedule")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to delete schedule due to a server error.",
+        )
 
 
 if __name__ == "__main__":

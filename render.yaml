@@ -16,3 +16,5 @@ services:
         value: production
       - key: AUTH_REQUIRED
         value: "true"
+      - key: SCHEDULER_ENABLED
+        value: "false"

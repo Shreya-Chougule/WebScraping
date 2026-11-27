@@ -1,6 +1,7 @@
 # Python virtual environments
 .venv/
 .venv-1/
+.venv-2/
 venv/
 
 # Python cache and compiled files
@@ -11,6 +12,7 @@ __pycache__/
 # Environment variables and secrets
 .env
 .env.*
+!.env.example
 
 # Generated output
 output/*
@@ -21,6 +23,7 @@ node_modules/
 
 # React build and test output
 /build/
+/frontend/build/
 /coverage/
 
 # Logs
@@ -33,7 +36,13 @@ test_data/*
 !test_data/
 !test_data/truelancer_listings.html
 
+# Local audit snapshots
+/phase45_audit.txt
+/phase45_implementation_audit.txt
+
+# Local backup files
+/backend/main.py.before-swagger-auth.bak
+/backend/main.py.route-security.bak
+
 # Local tool configuration
 .qodo/
-
-.venv-2/

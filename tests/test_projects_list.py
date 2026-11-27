@@ -31,7 +31,7 @@ def main_module(monkeypatch):
         )
         module = importlib.util.module_from_spec(spec)
 
-        with patch("supabase.create_client"):
+        with patch("backend.supabase_client.create_client"):
             spec.loader.exec_module(module)
 
     return module

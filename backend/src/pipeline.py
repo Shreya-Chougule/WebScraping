@@ -7,9 +7,9 @@ Importing this module does not start scraping or scheduling.
 """
 
 import json
+import logging
 from typing import Optional
 
-from src.extraction_schema import ExtractedProject
 from src.scraper import (
     SCRAPING_RUNS_ENDPOINT,
     create_scraping_run,
@@ -17,6 +17,8 @@ from src.scraper import (
     send_projects_to_api,
     update_scraping_run,
 )
+
+logger = logging.getLogger("scrapescout.pipeline")
 
 
 def run_truelancer_pipeline(
@@ -31,6 +33,10 @@ def run_truelancer_pipeline(
     submitter=None,
     run_creator=None,
     run_updater=None,
+    provider: Optional[str] = None,
+    scraperapi_key: Optional[str] = None,
+    render_js: bool = False,
+    country_code: Optional[str] = None,
 ) -> dict:
     """Execute the complete Truelancer scraping and submission workflow."""
 
@@ -60,13 +66,26 @@ def run_truelancer_pipeline(
     records_found = 0
 
     try:
-        projects = scrape(
-            start_url=start_url,
-            max_pages=max_pages,
-            min_request_interval=min_request_interval,
-            fetcher=fetcher,
-            sleep_fn=sleep_fn,
-        )
+        if scraper is None:
+            projects = scrape(
+                start_url=start_url,
+                max_pages=max_pages,
+                min_request_interval=min_request_interval,
+                fetcher=fetcher,
+                sleep_fn=sleep_fn,
+                provider=provider,
+                scraperapi_key=scraperapi_key,
+                render_js=render_js,
+                country_code=country_code,
+            )
+        else:
+            projects = scrape(
+                start_url=start_url,
+                max_pages=max_pages,
+                min_request_interval=min_request_interval,
+                fetcher=fetcher,
+                sleep_fn=sleep_fn,
+            )
 
         if not isinstance(projects, list):
             raise ValueError("Scraper did not return a project list.")
@@ -118,11 +137,25 @@ def run_truelancer_pipeline(
             "submission": submission_results,
         }
 
-        print(f"[PIPELINE] Completed: {result}")
+        logger.info(
+            "Pipeline completed: run_id=%s status=%s records_found=%d "
+            "inserted=%s failed=%s",
+            run_id,
+            status,
+            records_found,
+            submission_results.get("inserted"),
+            failed_count,
+        )
 
         return result
 
     except Exception as exc:
+        logger.exception(
+            "Pipeline failed: run_id=%s records_found=%d",
+            run_id,
+            records_found,
+        )
+
         try:
             update_run(
                 run_id=run_id,
@@ -131,10 +164,10 @@ def run_truelancer_pipeline(
                 error_log=str(exc)[:5000],
                 api_endpoint=api_endpoint,
             )
-        except Exception as logging_error:
-            print(
-                "[ERROR] Could not update failed pipeline run: "
-                f"{logging_error}"
+        except Exception:
+            logger.exception(
+                "Could not update failed pipeline run: run_id=%s",
+                run_id,
             )
 
         raise

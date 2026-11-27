@@ -30,7 +30,7 @@ def backend():
                 "SUPABASE_SERVICE_ROLE_KEY": "test-key",
             },
         ),
-        patch("supabase.create_client") as mock_create_client,
+        patch("backend.supabase_client.create_client") as mock_create_client,
     ):
         spec = importlib.util.spec_from_file_location(
             "scrapescout_test_backend",
@@ -58,7 +58,6 @@ def test_create_scraping_run_endpoint(backend):
     ]
 
     request = module.ScrapingRunCreate(source_id=source_id)
-
     result = module.create_scraping_run_endpoint(request)
 
     assert result == expected_data
@@ -103,7 +102,10 @@ def test_update_scraping_run_endpoint(backend):
 
     assert result == expected_data
 
-    mock_supabase.table.assert_called_once_with("scraping_runs")
+    # Updating a run and sending its notification use separate tables.
+    mock_supabase.table.assert_any_call("scraping_runs")
+    mock_supabase.table.assert_any_call("notifications")
+    assert mock_supabase.table.call_count == 2
 
     update_data = (
         mock_supabase.table.return_value
@@ -113,6 +115,15 @@ def test_update_scraping_run_endpoint(backend):
     assert update_data["status"] == "SUCCESS"
     assert update_data["records_found"] == 15
     assert "completed_at" in update_data
+
+    notification_data = (
+        mock_supabase.table.return_value
+        .insert.call_args.args[0]
+    )
+
+    assert notification_data["title"] == "Scraping Run Success"
+    assert notification_data["type"] == "success"
+    assert "15 records found" in notification_data["message"]
 
 
 def test_update_scraping_run_endpoint_returns_404(backend):

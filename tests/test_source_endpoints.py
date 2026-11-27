@@ -48,10 +48,17 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, query):
         self.query = query
+        self.notification_query = FakeQuery(
+            SimpleNamespace(data=[])
+        )
         self.tables = []
 
     def table(self, name):
         self.tables.append(name)
+
+        if name == "notifications":
+            return self.notification_query
+
         return self.query
 
 
@@ -166,7 +173,8 @@ def test_create_project_inserts_and_returns_project(monkeypatch):
     assert response.json()["category"] == "Web Development"
     assert response.json()["confidence_score"] == 0.95
 
-    assert fake.tables == ["projects"]
+    # Project creation also sends a notification through its own table.
+    assert fake.tables == ["projects", "notifications"]
 
     insert_operations = [
         operation
@@ -192,6 +200,19 @@ def test_create_project_inserts_and_returns_project(monkeypatch):
     # Optional fields omitted from the request must not be inserted as null.
     assert "deadline" not in inserted_data
     assert "contact_info" not in inserted_data
+
+    # Verify that the notification was sent to the notifications table.
+    notification_inserts = [
+        operation
+        for operation in fake.notification_query.operations
+        if operation[0] == "insert"
+    ]
+
+    assert len(notification_inserts) == 1
+    notification_data = notification_inserts[0][1]
+
+    assert notification_data["title"] == "New Project Discovered"
+    assert payload["title"] in notification_data["message"]
 
 
 def test_create_project_returns_500_when_insert_returns_no_data(

@@ -1,8 +1,10 @@
 
 from pathlib import Path
+from functools import partial
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 import json
+import os
 import time
 
 import requests
@@ -16,12 +18,131 @@ from src.extraction_schema import (
     save_projects_json,
 )
 from src.supabase_mapper import map_project_to_supabase
-from src.truelancer_parser import parse_truelancer_html
+from src.truelancer_parser import (
+    parse_truelancer_html,
+    parse_truelancer_json,
+)
+from src.scraperapi_provider import fetch_page_via_scraperapi
 
 
-API_ENDPOINT = "http://127.0.0.1:8000/projects"
-SOURCE_ENDPOINT = "http://127.0.0.1:8000/sources"
-SCRAPING_RUNS_ENDPOINT = "http://127.0.0.1:8000/scraping-runs"
+# ============================================================
+# BACKEND API CONFIGURATION
+# ============================================================
+
+API_BASE_URL = os.getenv(
+    "SCRAPESCOUT_API_BASE_URL",
+    "http://127.0.0.1:8000",
+).rstrip("/")
+
+API_ENDPOINT = f"{API_BASE_URL}/projects"
+SOURCE_ENDPOINT = f"{API_BASE_URL}/sources"
+SCRAPING_RUNS_ENDPOINT = f"{API_BASE_URL}/scraping-runs"
+LOGIN_ENDPOINT = f"{API_BASE_URL}/auth/login"
+
+API_EMAIL_ENV = "SCRAPESCOUT_API_EMAIL"
+API_PASSWORD_ENV = "SCRAPESCOUT_API_PASSWORD"
+
+API_TOKEN_CACHE_SECONDS = 23 * 60 * 60
+
+_cached_api_token: Optional[str] = None
+_api_token_expires_at = 0.0
+
+
+class APIAuthenticationError(requests.RequestException):
+    """Raised when the scraper cannot authenticate with the backend API."""
+
+
+def _production_auth_required() -> bool:
+    """Determine whether missing scraper credentials must stop API calls."""
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    auth_required = os.getenv(
+        "AUTH_REQUIRED",
+        "false",
+    ).strip().lower()
+
+    return environment == "production" or auth_required == "true"
+
+
+def get_api_headers() -> dict[str, str]:
+    """Return backend API authentication headers."""
+    global _cached_api_token, _api_token_expires_at
+
+    email = os.getenv(API_EMAIL_ENV)
+    password = os.getenv(API_PASSWORD_ENV)
+
+    if not email or not password:
+        if _production_auth_required():
+            raise APIAuthenticationError(
+                "Backend API authentication is required. "
+                f"Configure {API_EMAIL_ENV} and {API_PASSWORD_ENV}."
+            )
+
+        return {}
+
+    if _cached_api_token and time.monotonic() < _api_token_expires_at:
+        return {
+            "Authorization": f"Bearer {_cached_api_token}",
+        }
+
+    try:
+        response = requests.post(
+            LOGIN_ENDPOINT,
+            json={
+                "email": email.strip().lower(),
+                "password": password,
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+
+        login_data = response.json()
+        access_token = login_data.get("access_token")
+
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise ValueError(
+                "Login response did not contain a valid access token."
+            )
+
+        _cached_api_token = access_token
+        _api_token_expires_at = (
+            time.monotonic() + API_TOKEN_CACHE_SECONDS
+        )
+
+        return {
+            "Authorization": f"Bearer {_cached_api_token}",
+        }
+
+    except (requests.RequestException, ValueError) as exc:
+        _cached_api_token = None
+        _api_token_expires_at = 0.0
+
+        raise APIAuthenticationError(
+            "Could not authenticate the scraper with the backend API. "
+            "Check the configured API URL and automation account."
+        ) from exc
+
+
+def _api_request_kwargs() -> dict:
+    """Return optional request arguments."""
+    headers = get_api_headers()
+
+    if not headers:
+        return {}
+
+    return {"headers": headers}
+
+
+def reset_api_token_cache() -> None:
+    """Clear the cached token. Primarily useful for tests and re-login."""
+    global _cached_api_token, _api_token_expires_at
+
+    _cached_api_token = None
+    _api_token_expires_at = 0.0
+
+
+# ============================================================
+# GENERAL CONFIGURATION
+# ============================================================
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -31,6 +152,13 @@ REQUEST_TIMEOUT = 15
 USER_AGENT = "ScrapeScout/1.0 (Educational Project)"
 
 ALLOWED_TRUELANCER_HOSTS = {
+    "truelancer.com",
+    "www.truelancer.com",
+    "api.truelancer.com",
+}
+
+
+ALLOWED_TRUELANCER_START_HOSTS = {
     "truelancer.com",
     "www.truelancer.com",
     "api.truelancer.com",
@@ -49,12 +177,7 @@ def fetch_page(
     url: str,
     timeout: int = REQUEST_TIMEOUT,
 ) -> str:
-    """
-    Fetch a public webpage safely.
-
-    Rejects malformed URLs, embedded credentials, and unexpected ports.
-    Does not automatically follow redirects or bypass security checkpoints.
-    """
+    """Fetch a public webpage safely without automatically following redirects."""
     try:
         parsed = urlparse(url)
 
@@ -119,7 +242,6 @@ def fetch_page(
     return response.text
 
 
-# Initialize the Project Classifier (Phase 6)
 classifier = ProjectClassifier()
 
 
@@ -140,7 +262,6 @@ def infer_project_type(
     technologies: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Infer the likely project type from available information."""
-
     text = " ".join(
         part
         for part in [
@@ -202,11 +323,7 @@ def resolve_project_url(
     base_url: str,
     href: Optional[str],
 ) -> Optional[str]:
-    """
-    Resolve a relative project link.
-
-    Return None when the link is missing or is not a valid HTTP/HTTPS URL.
-    """
+    """Resolve a relative project link and validate its URL."""
     if not isinstance(href, str) or not href.strip():
         return None
 
@@ -400,12 +517,7 @@ def send_projects_to_api(
     api_endpoint: str = API_ENDPOINT,
     source_endpoint: str = SOURCE_ENDPOINT,
 ) -> dict[str, int]:
-    """
-    Submit eligible projects to the FastAPI backend.
-
-    Returns counts for inserted, skipped, and failed projects.
-    Does not make direct Supabase requests.
-    """
+    """Submit eligible projects to the FastAPI backend."""
     results = {
         "total": len(projects),
         "inserted": 0,
@@ -422,9 +534,12 @@ def send_projects_to_api(
         return results
 
     try:
+        request_kwargs = _api_request_kwargs()
+
         source_response = requests.get(
             source_endpoint,
             timeout=REQUEST_TIMEOUT,
+            **request_kwargs,
         )
         source_response.raise_for_status()
         sources = source_response.json()
@@ -437,18 +552,23 @@ def send_projects_to_api(
         results["failed"] = len(projects)
         return results
 
-    source_lookup = {
-        source["name"].strip().casefold(): source["id"]
-        for source in sources
-        if isinstance(source, dict)
-        and source.get("name")
-        and source.get("id")
-    }
+    source_lookup = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        name = source.get("name")
+        src_id = source.get("id")
+        if not name or not src_id:
+            continue
+        key = name.strip().casefold()
+        if source.get("is_active") is True or key not in source_lookup:
+            source_lookup[key] = src_id
 
     try:
         existing_response = requests.get(
             api_endpoint,
             timeout=REQUEST_TIMEOUT,
+            **request_kwargs,
         )
         existing_response.raise_for_status()
         existing_projects = existing_response.json()
@@ -510,6 +630,7 @@ def send_projects_to_api(
                 api_endpoint,
                 json=payload,
                 timeout=REQUEST_TIMEOUT,
+                **request_kwargs,
             )
 
             if response.status_code in (200, 201):
@@ -549,12 +670,29 @@ def send_projects_to_api(
 
 
 # ============================================================
-# PHASE 4: PAGINATION
+# PHASE 4: PAGINATION AND RESPONSE PARSING
 # ============================================================
 
-def extract_next_page_url(html: str) -> Optional[str]:
-    """Extract the next-page URL from Truelancer's embedded JSON."""
-    soup = BeautifulSoup(html, "html.parser")
+def extract_next_page_url(response_text: str) -> Optional[str]:
+    """Extract the next-page URL from either Truelancer JSON or HTML."""
+    try:
+        data = json.loads(response_text)
+
+        if isinstance(data, dict):
+            pagination = data.get("projects")
+
+            if isinstance(pagination, dict):
+                next_url = pagination.get("next_page_url")
+
+                if isinstance(next_url, str) and next_url.strip():
+                    return next_url.strip()
+
+                return None
+
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    soup = BeautifulSoup(response_text, "html.parser")
     script = soup.find("script", id="__NEXT_DATA__")
 
     if script is None or not script.string:
@@ -581,7 +719,13 @@ def validate_pagination_url(
     next_url: str,
     start_url: str,
 ) -> bool:
-    """Allow HTTPS pagination only on the same approved host and port."""
+    """
+    Validate Truelancer pagination URLs.
+
+    The starting URL must use the main Truelancer website.
+    Subsequent URLs may use an explicitly approved Truelancer host,
+    including api.truelancer.com.
+    """
     try:
         next_parts = urlparse(next_url)
         start_parts = urlparse(start_url)
@@ -589,22 +733,22 @@ def validate_pagination_url(
         next_port = next_parts.port
         start_port = start_parts.port
 
-    except ValueError:
+    except (TypeError, ValueError):
         return False
 
-    if next_parts.scheme != "https":
+    if next_parts.scheme != "https" or start_parts.scheme != "https":
         return False
 
-    if start_parts.scheme != "https":
+    if not next_parts.hostname or not start_parts.hostname:
         return False
 
-    if not next_parts.netloc or not start_parts.netloc:
+    next_hostname = next_parts.hostname.lower()
+    start_hostname = start_parts.hostname.lower()
+
+    if start_hostname not in ALLOWED_TRUELANCER_START_HOSTS:
         return False
 
-    if next_parts.hostname not in ALLOWED_TRUELANCER_HOSTS:
-        return False
-
-    if next_parts.hostname != start_parts.hostname:
+    if next_hostname not in ALLOWED_TRUELANCER_HOSTS:
         return False
 
     if next_parts.username is not None or next_parts.password is not None:
@@ -625,19 +769,71 @@ def validate_pagination_url(
     return True
 
 
+def _parse_truelancer_response(
+    response_text: str,
+) -> list[ExtractedProject]:
+    """Choose the correct parser for a Truelancer HTML or JSON response."""
+    try:
+        data = json.loads(response_text)
+
+    except json.JSONDecodeError:
+        return parse_truelancer_html(response_text)
+
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        raise ValueError(
+            "Unexpected Truelancer JSON response structure."
+        )
+
+    return parse_truelancer_json(data)
+
+
+def resolve_page_fetcher(
+    provider: Optional[str] = None,
+    fetcher=None,
+    scraperapi_key: Optional[str] = None,
+    render_js: bool = False,
+    country_code: Optional[str] = None,
+):
+    """Resolve the page-fetching implementation."""
+    if fetcher is not None:
+        return fetcher
+
+    selected_provider = (
+        provider
+        if provider is not None
+        else os.getenv("SCRAPING_PROVIDER", "direct")
+    )
+
+    selected_provider = selected_provider.strip().lower()
+
+    if selected_provider in ("direct", "requests"):
+        return fetch_page
+
+    if selected_provider in ("scraperapi", "scraper_api", "scraper-api"):
+        return partial(
+            fetch_page_via_scraperapi,
+            api_key=scraperapi_key,
+            render_js=render_js,
+            country_code=country_code,
+        )
+
+    raise ValueError(
+        f"Unknown scraping provider '{selected_provider}'"
+    )
+
+
 def scrape_truelancer_pages(
     start_url: str,
     max_pages: int = 3,
     min_request_interval: float = 1.0,
     fetcher=None,
     sleep_fn=None,
+    provider: Optional[str] = None,
+    scraperapi_key: Optional[str] = None,
+    render_js: bool = False,
+    country_code: Optional[str] = None,
 ) -> list[ExtractedProject]:
-    """
-    Fetch and parse multiple Truelancer pages.
-
-    The fetcher and sleep_fn parameters allow local mock testing.
-    This function does not bypass access restrictions.
-    """
+    """Fetch and parse multiple Truelancer HTML or JSON pages."""
     if max_pages < 1:
         raise ValueError("max_pages must be at least 1.")
 
@@ -647,7 +843,14 @@ def scrape_truelancer_pages(
     if not validate_pagination_url(start_url, start_url):
         raise ValueError("A valid HTTPS Truelancer URL is required.")
 
-    fetch_page_function = fetcher or fetch_page
+    fetch_page_function = resolve_page_fetcher(
+        provider=provider,
+        fetcher=fetcher,
+        scraperapi_key=scraperapi_key,
+        render_js=render_js,
+        country_code=country_code,
+    )
+
     sleep_function = sleep_fn or time.sleep
 
     current_url = start_url
@@ -663,8 +866,9 @@ def scrape_truelancer_pages(
             f"{page_number + 1}: {current_url}"
         )
 
-        html = fetch_page_function(current_url)
-        page_projects = parse_truelancer_html(html)
+        response_text = fetch_page_function(current_url)
+
+        page_projects = _parse_truelancer_response(response_text)
 
         for project in page_projects:
             project_url = project.original_url
@@ -677,7 +881,10 @@ def scrape_truelancer_pages(
 
             projects.append(project)
 
-        next_url = extract_next_page_url(html)
+        if page_number + 1 >= max_pages:
+            break
+
+        next_url = extract_next_page_url(response_text)
 
         if not next_url:
             print("[INFO] No additional page available.")
@@ -686,7 +893,7 @@ def scrape_truelancer_pages(
         if not validate_pagination_url(next_url, start_url):
             raise ScrapingAccessError(
                 "Pagination stopped because the next-page URL "
-                "does not match the original Truelancer host."
+                "is not an approved HTTPS Truelancer URL."
             )
 
         current_url = next_url
@@ -712,6 +919,7 @@ def create_scraping_run(
             "status": "RUNNING",
         },
         timeout=REQUEST_TIMEOUT,
+        **_api_request_kwargs(),
     )
 
     response.raise_for_status()
@@ -749,6 +957,7 @@ def update_scraping_run(
         f"{api_endpoint}/{run_id}",
         json=payload,
         timeout=REQUEST_TIMEOUT,
+        **_api_request_kwargs(),
     )
 
     response.raise_for_status()
@@ -812,4 +1021,3 @@ if __name__ == "__main__":
         "before fetching live pages."
     )
     print("ScrapeScout extraction and classification module is ready.")
-    print("Configure selectors for an approved source before fetching live pages.")

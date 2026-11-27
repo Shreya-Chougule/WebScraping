@@ -65,4 +65,11 @@ def save_projects_csv(
         for project in projects:
             row = project.to_dict()
             row["technologies"] = ", ".join(row["technologies"])
-            writer.writerow(row)
+            # Protect against CSV formula injection
+            sanitized_row = {}
+            for k, v in row.items():
+                if isinstance(v, str) and v and v[0] in ("=", "+", "-", "@", "\t", "\r"):
+                    sanitized_row[k] = f"'{v}"
+                else:
+                    sanitized_row[k] = v
+            writer.writerow(sanitized_row)

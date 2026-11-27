@@ -1,25 +1,36 @@
+
 from datetime import datetime
 
 from src.extraction_schema import ExtractedProject
 
 
 NOT_SPECIFIED = "Not specified"
+DATABASE_UNSPECIFIED = "Unspecified"
 
 PROJECT_TYPE_ALIASES = {
-    "mobile app": "App",
+    "web": "Web",
+    "app": "Mobile",
+    "mobile app": "Mobile",
+    "mobile": "Mobile",
+    "both": "Both",
+    "software": DATABASE_UNSPECIFIED,
+    "unspecified": DATABASE_UNSPECIFIED,
 }
 
 
-def normalize_project_type(value: str | None) -> str | None:
-    """Normalize project types to the values used by the dashboard."""
-    if not value or value.strip().casefold() == NOT_SPECIFIED.casefold():
-        return None
+def normalize_project_type(value: str | None) -> str:
+    """Normalize extracted project types to the Supabase constraint values."""
+    if not isinstance(value, str) or not value.strip():
+        return DATABASE_UNSPECIFIED
 
     cleaned = value.strip()
 
+    if cleaned.casefold() == NOT_SPECIFIED.casefold():
+        return DATABASE_UNSPECIFIED
+
     return PROJECT_TYPE_ALIASES.get(
         cleaned.casefold(),
-        cleaned,
+        DATABASE_UNSPECIFIED,
     )
 
 
@@ -32,23 +43,18 @@ def convert_date(value: str | None) -> str | None:
     return parsed_date.isoformat()
 
 
-def map_project_to_supabase(
-    project: ExtractedProject,
-    source_id: str,
-) -> dict:
-    """
-    Map an extracted project to the Supabase projects table format.
-
-    The source_id must be resolved from the Supabase sources table.
-    """
+def map_project_to_supabase(project: ExtractedProject, source_id: str) -> dict:
+    """Map an extracted project to the Supabase projects table schema."""
     return {
         "title": project.title,
         "description": (
-            None if project.description == NOT_SPECIFIED
+            None
+            if project.description == NOT_SPECIFIED
             else project.description
         ),
         "budget": (
-            None if project.budget == NOT_SPECIFIED
+            None
+            if project.budget == NOT_SPECIFIED
             else project.budget
         ),
         "currency": project.currency,

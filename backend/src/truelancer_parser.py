@@ -30,11 +30,7 @@ def infer_truelancer_project_type(
     description: str | None,
     technologies: list[str],
 ) -> str | None:
-    """
-    Infer project type from explicit title, description, and skill evidence.
-
-    Supported values: Web, App, Software, Both, or None.
-    """
+    """Infer project type from explicit title, description, and skill evidence."""
 
     title_text = title.lower()
     description_text = (description or "").lower()
@@ -132,7 +128,6 @@ def infer_truelancer_project_type(
         r".{0,100}\b(?:develop|build|create)\b",
     )
 
-    # Collect evidence from all fields before deciding.
     has_web = (
         matches(web_title_patterns, title_text)
         or matches(web_skill_patterns, technology_text)
@@ -151,8 +146,6 @@ def infer_truelancer_project_type(
         or matches(software_description_patterns, description_text)
     )
 
-    # Prevent sales and marketing jobs from being classified as Web
-    # just because the description mentions website development services.
     sales_or_marketing_role = matches(
         (
             r"\bsales\b",
@@ -206,30 +199,15 @@ def canonicalize_url(url: str | None) -> str | None:
 
     path = parts.path.rstrip("/")
 
-    # Normalize both www and non-www URLs to one hostname.
     return urlunsplit(
         ("https", "truelancer.com", path, "", "")
     ).lower()
 
 
-def parse_truelancer_html(html: str) -> list[ExtractedProject]:
-    """Extract unique projects from locally saved Truelancer HTML."""
-    soup = BeautifulSoup(html, "html.parser")
-    script = soup.find("script", id="__NEXT_DATA__")
-
-    if script is None or not script.string:
-        raise ValueError(
-            "Truelancer embedded project data was not found."
-        )
-
-    try:
-        data = json.loads(script.string)
-        records = data["props"]["pageProps"]["data"]["projects"]["data"]
-
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ValueError(
-            "Unexpected Truelancer project data structure."
-        ) from exc
+def _parse_project_records(records: Any) -> list[ExtractedProject]:
+    """Convert Truelancer project records into standardized project objects."""
+    if not isinstance(records, list):
+        raise ValueError("Truelancer project records must be a list.")
 
     projects: list[ExtractedProject] = []
     seen_urls: set[str] = set()
@@ -247,7 +225,6 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         description = clean_text(record.get("description"))
 
         budget_value = record.get("budget")
-
         budget = (
             str(budget_value).strip()
             if budget_value is not None and str(budget_value).strip()
@@ -295,6 +272,7 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
 
         canonical_url = canonicalize_url(original_url)
 
+        # Do not treat application links or unrelated URLs as project listings.
         if original_url and canonical_url is None:
             original_url = None
 
@@ -345,6 +323,48 @@ def parse_truelancer_html(html: str) -> list[ExtractedProject]:
         )
 
     return projects
+
+
+def parse_truelancer_html(html: str) -> list[ExtractedProject]:
+    """Extract projects from Truelancer HTML containing __NEXT_DATA__."""
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NEXT_DATA__")
+
+    if script is None or not script.string:
+        raise ValueError(
+            "Truelancer embedded project data was not found."
+        )
+
+    try:
+        data = json.loads(script.string)
+        records = data["props"]["pageProps"]["data"]["projects"]["data"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(
+            "Unexpected Truelancer HTML project data structure."
+        ) from exc
+
+    return _parse_project_records(records)
+
+
+def parse_truelancer_json(
+    response: str | dict[str, Any],
+) -> list[ExtractedProject]:
+    """Extract projects from Truelancer's JSON API response."""
+    try:
+        data = json.loads(response) if isinstance(response, str) else response
+
+        if not isinstance(data, dict):
+            raise ValueError("JSON response must be an object.")
+
+        projects_data = data["projects"]
+        records = projects_data["data"]
+
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError(
+            "Unexpected Truelancer JSON API response structure."
+        ) from exc
+
+    return _parse_project_records(records)
 
 
 def parse_truelancer_file(

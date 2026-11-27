@@ -10,7 +10,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from main import app
 from auth import create_access_token
-from notifications import (
+from backend.notifications import (
     create_notification,
     safe_notify,
 )
@@ -68,7 +68,7 @@ def test_mark_notification_not_found():
 
 
 def test_mark_all_notifications_read():
-    import notifications
+    from backend import notifications
 
     user_id = f"bulk-user-{uuid4().hex}"
 
@@ -174,7 +174,7 @@ def test_user_can_mark_own_notification_as_read():
 
 
 def test_broadcast_read_status_is_independent_per_user():
-    import notifications
+    from backend import notifications
 
     broadcast = create_notification(
         title="System broadcast",
@@ -216,7 +216,7 @@ def test_broadcast_read_status_is_independent_per_user():
 
 
 def test_user_cannot_mark_another_users_notification_read():
-    import notifications
+    from backend import notifications
 
     private = create_notification(
         title="Private",
@@ -234,7 +234,7 @@ def test_user_cannot_mark_another_users_notification_read():
 
 
 def test_admin_cannot_list_another_users_private_notifications():
-    import notifications
+    from backend import notifications
 
     private = create_notification(
         title="Private admin test",
@@ -256,7 +256,7 @@ def test_admin_cannot_list_another_users_private_notifications():
 
 
 def test_mark_all_as_read_only_affects_own_and_broadcast_notifications():
-    import notifications
+    from backend import notifications
 
     user_id = f"bulk-isolation-{uuid4().hex}"
 
@@ -290,7 +290,7 @@ def test_mark_all_as_read_only_affects_own_and_broadcast_notifications():
 
 
 def test_mark_all_as_read_without_user_id_changes_nothing():
-    import notifications
+    from backend import notifications
 
     notif = create_notification(
         title="Protected notification",

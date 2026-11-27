@@ -28,7 +28,7 @@ def backend():
                 "SUPABASE_SERVICE_ROLE_KEY": "test-key",
             },
         ),
-        patch("supabase.create_client") as mock_create_client,
+        patch("backend.supabase_client.create_client") as mock_create_client,
     ):
         spec = importlib.util.spec_from_file_location(
             "scrapescout_test_dashboard_analytics_backend",
@@ -95,8 +95,8 @@ def test_dashboard_analytics_returns_expected_statistics(backend):
         "total": 120,
         "today": 8,
         "Web": 40,
-        "App": 35,
-        "Software": 30,
+        "Mobile": 35,
+        "Unspecified": 30,
         "Both": 15,
         "source-1": 100,
         "source-2": 20,
@@ -184,8 +184,8 @@ def test_dashboard_analytics_returns_expected_statistics(backend):
 
     assert result["projects_by_type"] == {
         "Web": 40,
-        "App": 35,
-        "Software": 30,
+        "Mobile": 35,
+        "Unspecified": 30,
         "Both": 15,
     }
 
@@ -255,3 +255,29 @@ def test_dashboard_analytics_handles_database_error(backend):
     )
 
     assert "Database unavailable" not in exc.value.detail
+
+
+def test_dashboard_analytics_excludes_inactive_sources(backend):
+    module, mock_client = backend
+
+    sources = [
+        {"id": "source-1", "name": "Truelancer", "is_active": True},
+        {"id": "source-2", "name": "Sample Job Board", "is_active": False},
+        {"id": "source-3", "name": "LinkedIn Industry Hub", "is_active": False},
+    ]
+
+    def table_side_effect(table_name):
+        if table_name == "sources":
+            return FakeQuery(make_response(data=sources))
+        if table_name == "projects":
+            return FakeQuery(make_response(count=5))
+        if table_name == "scraping_runs":
+            return FakeQuery(make_response(count=1))
+        raise AssertionError(f"Unexpected table: {table_name}")
+
+    mock_client.table.side_effect = table_side_effect
+
+    result = get_dashboard_endpoint(module)()
+    assert result["projects_by_source"] == [
+        {"source_name": "Truelancer", "project_count": 5}
+    ]

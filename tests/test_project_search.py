@@ -28,7 +28,7 @@ def backend():
                 "SUPABASE_SERVICE_ROLE_KEY": "test-key",
             },
         ),
-        patch("supabase.create_client") as mock_create_client,
+        patch("backend.supabase_client.create_client") as mock_create_client,
     ):
         spec = importlib.util.spec_from_file_location(
             "scrapescout_test_project_search",
